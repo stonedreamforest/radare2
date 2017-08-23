@@ -143,7 +143,7 @@ R_API int r_io_desc_write(RIODesc *desc, const ut8* buf, int len) {
 		return 0;
 	}
 	//check pointers and pcache
-	if (desc->io && desc->io->p_cache) {
+	if (desc->io && (desc->io->p_cache & 2)) {
 		return r_io_desc_cache_write (desc,
 				r_io_desc_seek (desc, 0LL, R_IO_SEEK_CUR), buf, len);
 	}
@@ -165,8 +165,8 @@ R_API int r_io_desc_read(RIODesc *desc, ut8 *buf, int len) {
 	}
 	seek = r_io_desc_seek (desc, 0LL, R_IO_SEEK_CUR);
 	ret = desc->plugin->read (desc->io, desc, buf, len);
-	if ((ret == len) && desc->io && desc->io->p_cache) {
-		ret = r_io_desc_cache_read (desc, seek, buf, len);
+	if ((ret > 0) && desc->io && (desc->io->p_cache & 1)) {
+		ret = r_io_desc_cache_read (desc, seek, buf, ret);
 	}
 	return ret;
 }
@@ -230,6 +230,13 @@ R_API bool r_io_desc_exchange(RIO* io, int fd, int fdx) {
 	return true;
 }
 
+R_API bool r_io_desc_is_dbg(RIODesc *desc) {
+	if (desc && desc->plugin) {
+		return desc->plugin->isdbg;
+	}
+	return false;
+}
+
 R_API int r_io_desc_get_pid(RIODesc *desc) {
 	//-1 and -2 are reserved
 	if (!desc) {
@@ -283,6 +290,7 @@ static bool desc_fini_cb(void* user, void* data, ut32 id) {
 	if (desc->plugin && desc->plugin->close) {
 		desc->plugin->close (desc);
 	}
+	r_io_desc_free (desc);
 	return true;
 }
 
