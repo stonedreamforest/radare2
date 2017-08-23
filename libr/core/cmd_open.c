@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2016 - pancake */
+/* radare - LGPL - Copyright 2009-2017 - pancake */
 
 #include "r_list.h"
 #include "r_config.h"
@@ -67,6 +67,9 @@ static const char *help_msg_oj[] = {
 static const char *help_msg_om[] = {
 	"Usage:", "om[-] [arg]", " # map opened files",
 	"om", "", "list all defined IO maps",
+	"om*", "", "list all maps in r2 commands format",
+	"omj", "", "list all maps in json format",
+	"om", " [fd]", "list all defined IO maps for a specific fd",
 	"om", "-mapid", "remove the map with corresponding id",
 	"om", " fd addr [size] [delta]", "create new io map",
 	"om.", "", "show map, that is mapped to current offset",
@@ -269,15 +272,34 @@ static void cmd_open_bin(RCore *core, const char *input) {
 	}
 }
 
-static void map_list(RIO *io, int mode, RPrint *print) {	//TODO: discuss the output format
+// TODO: discuss the output format
+static void map_list(RIO *io, int mode, RPrint *print, int fd) {
 	SdbListIter *iter;
 	RIOMap *map;
 	if (!io || !io->maps || !print || !print->cb_printf) {
 		return;
 	}
-	ls_foreach_prev (io->maps, iter, map) {
+	if (mode == 'j') {
+		print->cb_printf ("[");
+	}
+	bool first = true;
+	ls_foreach (io->maps, iter, map) {
+		if (fd != -1 && map->fd != fd) {
+			continue;
+		}
 		switch (mode) {
+		case 'j':
+			if (!first) {
+				print->cb_printf (",");
+			}
+			first = false;
+			print->cb_printf ("{\"map\":%i,\"fd\":%d,\"delta\":%"PFMT64d",\"from\":%"PFMT64d
+					",\"to\":%"PFMT64d",\"flags\":\"%s\",\"name\":\"%s\"}", map->id, map->fd,
+					map->delta, map->from, map->to,
+					r_str_rwx_i (map->flags), (map->name ? map->name : ""));
+			break;
 		case 1:
+		case '*':
 		case 'r':
 			print->cb_printf ("om %d 0x%"PFMT64x" 0x%"PFMT64x" 0x%"PFMT64x"\n", map->fd,
 					map->from, map->to - map->from, map->delta);
@@ -287,7 +309,11 @@ static void map_list(RIO *io, int mode, RPrint *print) {	//TODO: discuss the out
 					" - 0x%"PFMT64x" ; %s : %s\n", map->id, map->fd,
 					map->delta, map->from, map->to,
 					r_str_rwx_i (map->flags), (map->name ? map->name : ""));
+			break;
 		}
+	}
+	if (mode == 'j') {
+		print->cb_printf ("]\n");
 	}
 }
 
@@ -398,10 +424,12 @@ static void cmd_open_map (RCore *core, const char *input) {
 				}
 			} else {
 				size = r_io_desc_size (desc);
+
 			}
 			r_io_map_add (core->io, fd, desc->flags, delta, addr, size);	//TODO:user should be able to set these
 		} else {
-			eprintf ("Invalid use of om . See om? for help.");
+			map_list (core->io, 0, core->print, r_num_math (core->num, s));
+			// eprintf ("Invalid use of om . See om? for help.");
 		}
 		free (s);
 		break;
@@ -409,10 +437,9 @@ static void cmd_open_map (RCore *core, const char *input) {
 		r_io_map_del (core->io, r_num_math (core->num, input+2));
 		break;
 	case '\0':
-		map_list (core->io, 0, core->print);
-		break;
+	case 'j':
 	case '*':
-		map_list (core->io, 'r', core->print);
+		map_list (core->io, input[1], core->print, -1);
 		break;
 	default:
 	case '?':
@@ -504,11 +531,12 @@ R_API void r_core_file_reopen_debug (RCore *core, const char *args) {
 static bool desc_list_cb(void *user, void *data, ut32 id) {
 	RPrint *p = (RPrint *)user;
 	RIODesc *desc = (RIODesc *)data;
-	RIOMap *map;
-	SdbListIter *iter;
 	p->cb_printf ("%2d %c %s : %s size=0x%"PFMT64x"\n", desc->fd, 
 			(desc->io && (desc->io->desc == desc)) ? '*' : '-',
 			desc->uri, r_str_rwx_i (desc->flags), r_io_desc_size (desc));
+#if 0
+	RIOMap *map;
+	SdbListIter *iter;
 	if (desc->io && desc->io->va && desc->io->maps) {
 		ls_foreach_prev (desc->io->maps, iter, map) {
 			if (map->fd == desc->fd) {
@@ -519,6 +547,7 @@ static bool desc_list_cb(void *user, void *data, ut32 id) {
 			}
 		}
 	}
+#endif
 	return true;
 }
 
@@ -858,9 +887,7 @@ static int cmd_open(void *data, const char *input) {
 			if (!r_core_file_open (core, input + 2, R_IO_READ, 0)) {
 				eprintf ("Cannot open file\n");
 			}
-			if (!r_core_bin_load (core, NULL, baddr)) {
-				r_config_set_i (core->config, "io.va", false);
-			}
+			(void)r_core_bin_load (core, NULL, baddr);
 		} else {
 			eprintf ("Missing argument\n");
 		}

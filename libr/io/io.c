@@ -14,11 +14,9 @@ static void onIterMap(SdbListIter* iter, RIO* io, ut64 vaddr, ut8* buf,
 	if (!io || !buf || len < 1) {
 		return;
 	}
-	if (!iter) {
+	if (!iter && io->desc) {
 		// end of list
-		if (io->desc) {
-			*ret &= (op (io, io->desc->fd ,vaddr, buf, len) == len);
-		}
+		*ret &= (op (io, io->desc->fd, vaddr, buf, len) <= 0);
 		return;
 	}
 	// this block is not that much elegant
@@ -34,14 +32,12 @@ static void onIterMap(SdbListIter* iter, RIO* io, ut64 vaddr, ut8* buf,
 	}
 	map = (RIOMap*) iter->data;
 	// search for next map or end of list
-	while (!(map->from <= vendaddr && vaddr < map->to)) {
+	while (!r_io_map_is_in_range (map, vaddr, vendaddr)) {
 		iter = iter->p;
 		// end of list
-		if (!iter) {
-			//this could reach the desc that is why <= 0
-			if (io->desc) {
-				*ret &= (op (io, io->desc->fd ,vaddr, buf, len) <= 0);
-			}
+		if (!iter && io->desc) {                      
+			// pread/pwrite
+			*ret &= (op (io, io->desc->fd, vaddr, buf, len) <= 0); 
 			return;
 		}
 		map = (RIOMap*) iter->data;
@@ -51,9 +47,9 @@ static void onIterMap(SdbListIter* iter, RIO* io, ut64 vaddr, ut8* buf,
 		buf = buf + (map->from - vaddr);
 		vaddr = map->from;
 		len = (int) (vendaddr - vaddr + 1);
-		if (vendaddr < map->to) {
+		if (vendaddr <= map->to) {
 			if (((map->flags & match_flg) == match_flg) || io->p_cache) {
-				*ret &= (op (io, map->fd ,map->delta, buf, len) == len);
+				*ret = (op (io, map->fd, map->delta, buf, len) == len);
 			}
 		} else {
 			if (((map->flags & match_flg) == match_flg) || io->p_cache) {
@@ -68,7 +64,7 @@ static void onIterMap(SdbListIter* iter, RIO* io, ut64 vaddr, ut8* buf,
 	} else {
 		if (vendaddr <= map->to) {
 			if (((map->flags & match_flg) == match_flg) || io->p_cache) {
-				//warning: may overflow in rare usecases
+				//can it overflow
 				*ret &= (op (io, map->fd, map->delta + (vaddr - map->from), buf, len) == len);
 			}
 		} else {
@@ -78,151 +74,8 @@ static void onIterMap(SdbListIter* iter, RIO* io, ut64 vaddr, ut8* buf,
 			}
 			vaddr = map->to + 1;
 			buf = buf + (len - (int) (vendaddr - map->to));
-			len = (int) (vendaddr - map->to + 1);
+			len = (int) (vendaddr - map->to);
 			onIterMap (iter->p, io, vaddr, buf, len, match_flg, op, ret);
-		}
-	}
-}
-
-static void alOnIterMap(SdbListIter* iter, RIO* io, ut64 vaddr, ut8* buf,
-		       int len, int match_flg, cbOnIterMap op, RList *log, bool *allocation_failed) {
-	RIOMap* map;
-	RIOAccessLog *al;
-	ut64 vendaddr;
-	if (!io || !buf || len < 1) {
-		return;
-	}
-	if (!iter) {
-		// end of list
-		if (io->desc) {
-			if (!(al = R_NEW0(RIOAccessLog))) {
-				*allocation_failed = true;
-				return;
-			}
-			al->vaddr = al->paddr = vaddr;
-			al->expect_len = len;
-			al->fd = io->desc->fd;
-			al->len = op (io, io->desc->fd ,vaddr, buf, len);
-			r_list_push (log, al);
-		}
-		return;
-	}
-	// this block is not that much elegant
-	if (UT64_ADD_OVFCHK (len - 1, vaddr)) { 
-		// needed for edge-cases
-		int nlen;                   
-		// add a test for this block
-		vendaddr = UT64_MAX;        
-		nlen = (int) (UT64_MAX - vaddr + 1);
-		alOnIterMap (iter->p, io, 0LL, buf + nlen, len - nlen, match_flg, op, log, allocation_failed);
-		if (*allocation_failed) {
-			return;
-		}
-	} else {
-		vendaddr = vaddr + len - 1;
-	}
-	map = (RIOMap*) iter->data;
-	// search for next map or end of list
-	while (!(map->from <= vendaddr && vaddr < map->to)) {
-		iter = iter->p;
-		// end of list
-		if (!iter) {
-			if (io->desc) {
-				if (!(al = R_NEW0(RIOAccessLog))) {
-					*allocation_failed = true;
-					return;
-				}
-				al->vaddr = al->paddr = vaddr;
-				al->expect_len = len;
-				al->fd = io->desc->fd;
-				al->len = op (io, io->desc->fd ,vaddr, buf, len);
-				r_list_push (log, al);
-			}
-			return;
-		}
-		map = (RIOMap*) iter->data;
-	}
-	if (map->from >= vaddr) {
-		alOnIterMap (iter->p, io, vaddr, buf, (int) (map->from - vaddr), match_flg, op, log, allocation_failed);
-		if (*allocation_failed) {
-			return;
-		}
-		buf = buf + (map->from - vaddr);
-		vaddr = map->from;
-		len = (int) (vendaddr - vaddr + 1);
-		if (vendaddr < map->to) {
-			if (((map->flags & match_flg) == match_flg) || io->p_cache) {
-				if (!(al = R_NEW0(RIOAccessLog))) {
-					*allocation_failed = true;
-					return;
-				}
-				al->vaddr = vaddr;
-				al->paddr = map->delta;
-				al->expect_len = len;
-				al->fd = map->fd;
-				al->mapid = map->id;
-				al->len = op (io, map->fd ,map->delta, buf, len);
-				r_list_push (log, al);
-			}
-		} else {
-			if (((map->flags & match_flg) == match_flg) || io->p_cache) {
-				if (!(al = R_NEW0(RIOAccessLog))) {
-					*allocation_failed = true;
-					return;
-				}
-				al->vaddr = vaddr;
-				al->paddr = map->delta;
-				al->expect_len = len - (int) (vendaddr - map->to + 1);
-				al->fd = map->fd;
-				al->mapid = map->id;
-				al->len = op (io, map->fd, map->delta, buf, al->expect_len);
-				r_list_push (log, al);
-			}
-			vaddr = map->to;
-			buf = buf + (len - (int) (vendaddr - map->to + 1));
-			len = (int) (vendaddr - map->to + 1);
-			alOnIterMap (iter->p, io, vaddr, buf, len, match_flg, op, log, allocation_failed);
-			if (*allocation_failed) {
-				return;
-			}
-		}
-	} else {
-		if (vendaddr < map->to) {
-			if (((map->flags & match_flg) == match_flg) || io->p_cache) {
-				//warning: may overflow in rare usecases
-				if (!(al = R_NEW0(RIOAccessLog))) {
-					*allocation_failed = true;
-					return;
-				}
-				al->vaddr = vaddr;
-				al->paddr = map->delta + (vaddr - map->from);
-				al->expect_len = len;
-				al->fd = map->fd;
-				al->mapid = map->id;
-				al->len = op (io, map->fd, map->delta + (vaddr - map->from), buf, len);
-				r_list_push (log, al);
-			}
-		} else {
-			if (((map->flags & match_flg) == match_flg) || io->p_cache) {
-				if (!(al = R_NEW0(RIOAccessLog))) {
-					*allocation_failed = true;
-					return;
-				}
-				al->vaddr = vaddr;
-				al->paddr = map->delta + (vaddr - map->from);
-				al->expect_len = len - (int) (vendaddr - map->to + 1);
-				al->fd = map->fd;
-				al->mapid = map->id;
-				al->len = op (io, map->fd, map->delta + (vaddr - map->from), buf, len - (int) (vendaddr - map->to + 1));
-				r_list_push (log, al);
-			}
-			vaddr = map->to;
-			buf = buf + (len - (int) (vendaddr - map->to + 1));
-			len = (int) (vendaddr - map->to + 1);
-			alOnIterMap (iter->p, io, vaddr, buf, len, match_flg, op, log, allocation_failed);
-			if (allocation_failed) {
-				return;
-			}
 		}
 	}
 }
@@ -445,82 +298,6 @@ R_API bool r_io_vwrite_at(RIO* io, ut64 vaddr, const ut8* buf, int len) {
 	}
 	onIterMap (io->maps->tail, io, vaddr, (ut8*)buf, len, R_IO_WRITE, (cbOnIterMap)r_io_fd_write_at, &ret);
 	return ret;
-}
-
-R_API RList *r_io_alvread_at (RIO *io, ut64 vaddr, ut8 *buf, int len, bool *allocation_failed) {
-	RList *log;
-	if (!io || !buf || (len < 1)) {
-		return NULL;
-	}
-	if ((*allocation_failed = !(log = r_list_newf (free)))) {
-		return NULL;
-	}
-	if (io->ff) {
-		memset (buf, 0xff, len);
-	}
-	r_io_map_cleanup (io);
-	if (!io->maps) {
-		if (!io->desc) {
-			return log;
-		}
-		RIOAccessLog *al = R_NEW0 (RIOAccessLog);
-		if (!al) {
-			*allocation_failed = true;
-			return log;
-		}
-		al->vaddr = al->paddr = vaddr;
-		al->expect_len = len;
-		al->len = r_io_pread_at (io, vaddr, buf, len);
-		al->fd = io->desc->fd;
-		r_list_push (log, al);
-		return log;
-	}
-	alOnIterMap (io->maps->tail, io, vaddr, buf, len, R_IO_READ, r_io_fd_read_at, log, allocation_failed);
-	//sort?
-	return log;
-}
-
-R_API RList *r_io_alvwrite_at (RIO *io, ut64 vaddr, const ut8 *buf, int len, bool *allocation_failed) {
-	RList *log;
-	ut8 *mybuf;
-	if (!io || !buf || (len < 1)) {
-		return NULL;
-	}
-	mybuf = (ut8*) buf;
-	if ((*allocation_failed = !(log = r_list_newf (free)))) {
-		return NULL;
-	}
-	r_io_map_cleanup (io);
-	if (!io->maps) {
-		if (!io->desc) {
-			return log;
-		}
-		RIOAccessLog *al = R_NEW0 (RIOAccessLog);
-		if (!al) {
-			*allocation_failed = true;
-			return log;
-		}
-		al->vaddr = al->paddr = vaddr;
-		al->expect_len = len;
-		al->len = r_io_pwrite_at (io, vaddr, mybuf, len);
-		al->fd = io->desc->fd;
-		r_list_push (log, al);
-		return log;
-	}
-	alOnIterMap (io->maps->tail, io, vaddr, mybuf, len, R_IO_READ, r_io_fd_write_at, log, allocation_failed);
-	return log;
-}
-
-R_API void r_io_alprint(RList/*<RIOAccessLog>*/ *ls) {
-	RListIter *iter;
-	RIOAccessLog *al;
-	eprintf ("==============\n");
-	r_list_foreach (ls, iter, al) {
-		eprintf ("vaddr: 0x%08" PFMT64x " paddr: 0x%08" PFMT64x
-			 " -- expect_len: %d, len: %d, fd: %d, mapid: %d\n",
-			 al->vaddr, al->paddr, al->expect_len, al->len, al->fd,
-			 al->mapid);
-	}
 }
 
 R_API bool r_io_read_at(RIO* io, ut64 addr, ut8* buf, int len) {
