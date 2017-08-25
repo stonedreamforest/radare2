@@ -872,16 +872,9 @@ repeat:
 			{
 				bool must_eob = anal->opt.eobjmp;
 				if (!must_eob) {
-					RIOSection *s = NULL;
-					SdbList	*secs = anal->iob.sections_vget (anal->iob.io, addr);
-					if (secs) {
-						s = (RIOSection *) ls_pop (secs);
-						secs->free = NULL;
-						ls_free (secs);
-					}
+					RIOSection *s = anal->iob.sect_vget (anal->iob.io, addr);
 					if (s) {
-						must_eob = (s->vaddr <= op.jump);
-						must_eob &= ((s->vaddr + s->vsize) > op.jump);
+						must_eob = (op.jump < s->vaddr || op.jump >= s->vaddr + s->vsize);
 					}
 				}
 				if (must_eob) {

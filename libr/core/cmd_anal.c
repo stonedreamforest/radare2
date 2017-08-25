@@ -1890,7 +1890,6 @@ static int cmd_anal_fcn(RCore *core, const char *input) {
 			if (fcn) {
 				r_anal_fcn_resize (fcn, addr_end - addr);
 			}
-
 			r_config_set_i (core->config, "anal.from", a);
 			r_config_set_i (core->config, "anal.to", b);
 			r_config_set (core->config, "anal.limits", c? c: "");
@@ -2023,7 +2022,9 @@ static int cmd_anal_fcn(RCore *core, const char *input) {
 			if (arg) {
 				arg++;
 			}
-		} else addr = core->offset;
+		} else {
+			addr = core->offset;
+		}
 		if ((f = r_anal_get_fcn_in (core->anal, addr, R_ANAL_FCN_TYPE_NULL))) {
 			if (arg && *arg) {
 				r_anal_str_to_fcn (core->anal, f, arg);
@@ -2440,7 +2441,7 @@ static int cmd_anal_fcn(RCore *core, const char *input) {
 						/* only follow code/call references */
 						continue;
 					}
-					if (!r_io_is_valid_section_offset (core->io, ref->addr, 1)) {
+					if (!r_io_is_valid_offset (core->io, ref->addr, 1)) {
 						continue;
 					}
 					r_core_anal_fcn (core, ref->addr, fcn->addr, R_ANAL_REF_TYPE_CALL, depth);
@@ -2451,7 +2452,7 @@ static int cmd_anal_fcn(RCore *core, const char *input) {
 						RListIter *iter;
 						RAnalRef *ref;
 						r_list_foreach (f->refs, iter, ref) {
-							if (!r_io_is_valid_section_offset (core->io, ref->addr, R_IO_EXEC)) {
+							if (!r_io_is_valid_offset (core->io, ref->addr, R_IO_EXEC)) {
 								continue;
 							}
 							r_core_anal_fcn (core, ref->addr, f->addr, R_ANAL_REF_TYPE_CALL, depth);
@@ -2498,26 +2499,27 @@ static void __anal_reg_list(RCore *core, int type, int size, char mode) {
 	if (use_colors) {
 #undef ConsP
 #define ConsP(x) (core->cons && core->cons->pal.x)? core->cons->pal.x
-		use_color = ConsP (creg)
-		: Color_BWHITE;
+		use_color = ConsP (creg) : Color_BWHITE;
 	} else {
 		use_color = NULL;
 	}
-	core->dbg->reg = core->anal->reg;
-
-	if (core->anal && core->anal->cur && core->anal->cur->arch) {
-		/* workaround for thumb */
-		if (!strcmp (core->anal->cur->arch, "arm") && bits == 16) {
-			bits = 32;
-		}
-		/* workaround for 6502 */
-		if (!strcmp (core->anal->cur->arch, "6502") && bits == 8) {
-			r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, 16, mode, use_color); // XXX detect which one is current usage
-		}
-		if (!strcmp (core->anal->cur->arch, "avr") && bits == 8) {
-			r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, 16, mode, use_color); // XXX detect which one is current usage
+	if (core->anal) {
+		core->dbg->reg = core->anal->reg;
+		if (core->anal->cur && core->anal->cur->arch) {
+			/* workaround for thumb */
+			if (!strcmp (core->anal->cur->arch, "arm") && bits == 16) {
+				bits = 32;
+			}
+			/* workaround for 6502 */
+			if (!strcmp (core->anal->cur->arch, "6502") && bits == 8) {
+				r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, 16, mode, use_color); // XXX detect which one is current usage
+			}
+			if (!strcmp (core->anal->cur->arch, "avr") && bits == 8) {
+				r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, 16, mode, use_color); // XXX detect which one is current usage
+			}
 		}
 	}
+
 	if (mode == '=') {
 		int pcbits = 0;
 		const char *pcname = r_reg_get_name (core->anal->reg, R_REG_NAME_PC);
@@ -2779,9 +2781,9 @@ void cmd_anal_reg(RCore *core, const char *str) {
 			regname = r_str_clean (ostr);
 			r = r_reg_get (core->dbg->reg, regname, -1);
 			if (!r) {
-				int type = r_reg_get_name_idx (regname);
-				if (type != -1) {
-					const char *alias = r_reg_get_name (core->dbg->reg, type);
+				int role = r_reg_get_name_idx (regname);
+				if (role != -1) {
+					const char *alias = r_reg_get_name (core->dbg->reg, role);
 					r = r_reg_get (core->dbg->reg, alias, -1);
 				}
 			}
@@ -2884,7 +2886,7 @@ repeat:
 		*prev_addr = addr;
 	}
 	if (esil->exectrap) {
-		if (!r_io_is_valid_real_offset (core->io, addr, R_IO_EXEC)) {
+		if (!r_io_is_valid_offset (core->io, addr, R_IO_EXEC)) {
 			esil->trap = R_ANAL_TRAP_EXEC_ERR;
 			esil->trap_code = addr;
 			eprintf ("[ESIL] Trap, trying to execute on non-executable memory\n");
@@ -3354,28 +3356,42 @@ static RList *mymemxsr = NULL;
 static RList *mymemxsw = NULL;
 
 #define R_NEW_DUP(x) memcpy((void*)malloc(sizeof(x)), &(x), sizeof(x))
+typedef struct {
+	ut64 addr;
+	int size;
+} AeaMemItem;
 
 static int mymemwrite(RAnalEsil *esil, ut64 addr, const ut8 *buf, int len) {
 	RListIter *iter;
-	ut64 *n;
+	AeaMemItem *n;
 	r_list_foreach (mymemxsw, iter, n) {
-		if (addr == *n) {
+		if (addr == n->addr) {
 			return len;
 		}
 	}
-	r_list_push (mymemxsw, R_NEW_DUP (addr));
+	n = R_NEW (AeaMemItem);
+	if (n) {
+		n->addr = addr;
+		n->size = len;
+		r_list_push (mymemxsw, n);
+	}
 	return len;
 }
 
 static int mymemread(RAnalEsil *esil, ut64 addr, ut8 *buf, int len) {
 	RListIter *iter;
-	ut64 *n;
+	AeaMemItem *n;
 	r_list_foreach (mymemxsr, iter, n) {
-		if (addr == *n) {
+		if (addr == n->addr) {
 			return len;
 		}
 	}
-	r_list_push (mymemxsr, R_NEW_DUP (addr));
+	n = R_NEW (AeaMemItem);
+	if (n) {
+		n->addr = addr;
+		n->size = len;
+		r_list_push (mymemxsr, n);
+	}
 	return len;
 }
 
@@ -3524,15 +3540,15 @@ static bool cmd_aea(RCore* core, int mode, ut64 addr, int length) {
 	}
 	if ((mode >> 5) & 1) {
 		RListIter *iter;
-		ut64 *n;
+		AeaMemItem *n;
 		int c = 0;
 		r_cons_printf ("f-mem.*\n");
 		r_list_foreach (mymemxsr, iter, n) {
-			r_cons_printf ("f mem.read.%d = 0x%08"PFMT64x"\n", c++, *n);
+			r_cons_printf ("f mem.read.%d 0x%08x @ 0x%08"PFMT64x"\n", c++, n->size, n->addr);
 		}
 		c = 0;
 		r_list_foreach (mymemxsw, iter, n) {
-			r_cons_printf ("f mem.write.%d = 0x%08"PFMT64x"\n", c++, *n);
+			r_cons_printf ("f mem.write.%d 0x%08x @ 0x%08"PFMT64x"\n", c++, n->size, n->addr);
 		}
 	}
 
@@ -4242,7 +4258,7 @@ static void _anal_calls(RCore *core, ut64 addr, ut64 addr_end) {
 				// add xref here
 				RAnalFunction * fcn = r_anal_get_fcn_at (core->anal, addr, R_ANAL_FCN_TYPE_NULL);
 				r_anal_fcn_xref_add (core->anal, fcn, addr, op.jump, 'C');
-				if (r_io_is_valid_section_offset (core->io, op.jump, 1)) {
+				if (r_io_is_valid_offset (core->io, op.jump, 1)) {
 					r_core_anal_fcn (core, op.jump, addr, R_ANAL_REF_TYPE_NULL, depth);
 				}
 #endif
@@ -5460,7 +5476,7 @@ static void cmd_anal_aad(RCore *core, const char *input) {
 	RList *list = r_list_newf (NULL);
 	r_anal_xrefs_from (core->anal, list, "xref", R_ANAL_REF_TYPE_DATA, UT64_MAX);
 	r_list_foreach (list, iter, ref) {
-		if (r_io_is_valid_section_offset (core->io, ref->addr, false)) {
+		if (r_io_is_valid_offset (core->io, ref->addr, false)) {
 			r_core_anal_fcn (core, ref->at, ref->addr, R_ANAL_REF_TYPE_NULL, 1);
 		}
 	}

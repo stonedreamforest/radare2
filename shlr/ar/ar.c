@@ -7,6 +7,7 @@
 
 const char *AR_MAGIC_HEADER = "!<arch>\n";
 const char *AR_FILE_HEADER_END = "`\n";
+const int AR_FILENAME_LEN = 16;
 
 /* Used to lookup filename table */
 static int index_filename = -2;
@@ -24,7 +25,7 @@ R_API RBuffer *ar_open_file(const char *arname, const char *filename) {
 	}
 
 	/* Read magic header */
-	char *buffer = calloc (1, BUF_SIZE);
+	char *buffer = calloc (1, BUF_SIZE + 1);
 	if (!buffer) {
 		return NULL;
 	}
@@ -39,20 +40,12 @@ R_API RBuffer *ar_open_file(const char *arname, const char *filename) {
 
 	/* If b->base is set, then we found the file root in the archive */
 	while (r && !b->base) {
-		ar_read (b, buffer, 2);
-		/* Fix padding */
-		if (*buffer == '\n') {
-			buffer[0] = buffer[1];
-			b->cur -= 1;
-			ar_read (b, buffer, 2);
-		}
 		r = ar_read_file (b, buffer, false, files, filename);
 	}
 
 	if (!filename) {
 		RListIter *iter;
 		char *name;
-		puts ("Available files:\n");
 		r_list_foreach (files, iter, name) {
 			printf ("%s\n", name);
 		}
@@ -130,22 +123,35 @@ int ar_read_file(RBuffer *b, char *buffer, bool lookup, RList *files, const char
 
 	/* File identifier */
 	if (lookup) {
-		r = ar_read (b, buffer, 16);
+		ar_read (b, buffer, AR_FILENAME_LEN);
 	} else {
-		r = ar_read (b, buffer + 2, 14);
+		ar_read (b, buffer, 2);
+		/* Fix padding issues */
+		if (*buffer == '\n') {
+			buffer[0] = buffer[1];
+			b->cur--;
+			ar_read (b, buffer, 2);
+		}
+		ar_read (b, buffer + 2, AR_FILENAME_LEN - 2);
 	}
+	buffer[AR_FILENAME_LEN] = '\0';
 	/* Fix some padding issues */
-	if (buffer[15] != '/' && buffer[15] != ' ') {
-		tmp = strrchr (buffer, ' ');
+	if (buffer[AR_FILENAME_LEN - 1] != '/' && buffer[AR_FILENAME_LEN - 1] != ' ') {
+		// Find padding offset
+		tmp = (char *)r_str_lchr (buffer, ' ');
+		if (!tmp) {
+			goto fail;
+		}
 		int dif = (int) (tmp - buffer);
 		dif = 31 - dif;
+		// Re-read the whole filename
 		b->cur -= dif;
-		r = ar_read (b, buffer, 16);
+		r = ar_read (b, buffer, AR_FILENAME_LEN);
 	}
 	free (curfile);
 	curfile = strdup (buffer);
 	if (!curfile) {
-		return 0;
+		goto fail;
 	}
 	/* If /XX then refer to filename table later */
 	if (curfile[0] == '/' && curfile[1] >= '0' && curfile[1] <= '9') {
@@ -154,43 +160,29 @@ int ar_read_file(RBuffer *b, char *buffer, bool lookup, RList *files, const char
 		/* Read filename */
 		tmp = strchr (curfile, '/');
 		if (!tmp) {
-			return 0;
+			goto fail;
 		}
 		*tmp = '\0';
 		if (files) {
 			r_list_append (files, strdup (curfile));
 		}
 	}
-	/* File timestamp */
-	r = ar_read (b, buffer, 12);
-	if (r != 12) {
-		return 0;
+	/* Timestamp 12
+	 * Owner ID   6
+	 * Group ID   6
+	 * File Mode  8
+	 * File Size 10
+	 * Header end 2 */
+	r = ar_read (b, buffer, 44);
+	if (r != 44) {
+		goto fail;
 	}
-	/* Owner id */
-	r = ar_read (b, buffer, 6);
-	if (r != 6) {
-		return 0;
-	}
-	/* Group id */
-	r = ar_read (b, buffer, 6);
-	if (r != 6) {
-		return 0;
-	}
-	/* File mode */
-	r = ar_read (b, buffer, 8);
-	if (r != 8) {
-		return 0;
-	}
-	/* File size */
-	r = ar_read (b, buffer, 10);
-	filesize = strtoull (buffer, &tmp, 10);
-	if (r != 10) {
-		return 0;
-	}
+
+	filesize = strtoull (buffer + 32, &tmp, 10);
+
 	/* Header end */
-	r = ar_read (b, buffer, 2);
-	if (strncmp (buffer, AR_FILE_HEADER_END, 2)) {
-		return 0;
+	if (strncmp (buffer + 42, AR_FILE_HEADER_END, 2)) {
+		goto fail;
 	}
 
 	/* File content */
@@ -199,22 +191,28 @@ int ar_read_file(RBuffer *b, char *buffer, bool lookup, RList *files, const char
 		if (index == index_filename || !strcmp (curfile, filename)) {
 			b->length = filesize;
 			b->base = b->cur;
+			free (curfile);
 			return b->length;
 		}
 	}
 	r = ar_read (b, buffer, 1);
 
 	b->cur += filesize - 1;
+	free (curfile);
 	return filesize;
+fail:
+	free (curfile);
+	return 0;
 }
 
 int ar_read_filename_table(RBuffer *b, char *buffer, RList *files, const char *filename) {
-	int r = ar_read (b, buffer, 16);
-	if (r != 16) {
+	int r = ar_read (b, buffer, AR_FILENAME_LEN);
+	if (r != AR_FILENAME_LEN) {
 		return 0;
 	}
 	if (strncmp (buffer, "//", 2)) {
-		b->cur -= 16;
+		// What we read was not a filename table, just go back
+		b->cur -= AR_FILENAME_LEN;
 		return 0;
 	}
 
