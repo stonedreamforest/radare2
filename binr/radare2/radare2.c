@@ -142,7 +142,7 @@ static int main_help(int line) {
 		" -u           set bin.filter=false to get raw sym/sec/cls names\n"
 		" -v, -V       show radare2 version (-V show lib versions)\n"
 		" -w           open file in write mode\n"
-		" -x           open file with exec-flag (for analysis mostly)\n"
+		" -x           open without exec-flag (asm.emu will not work), See io.exec\n"
 		" -z, -zz      do not load strings or load them even in raw\n");
 	}
 	if (line == 2) {
@@ -410,7 +410,7 @@ int main(int argc, char **argv, char **envp) {
 	int help = 0;
 	int run_anal = 1;
 	int run_rc = 1;
- 	int ret, c, perms = R_IO_READ;
+ 	int ret, c, perms = R_IO_READ | R_IO_EXEC;
 	bool sandbox = false;
 	ut64 baddr = UT64_MAX;
 	ut64 seek = UT64_MAX;
@@ -639,7 +639,8 @@ int main(int argc, char **argv, char **envp) {
 			perms |= R_IO_WRITE;
 			break;
 		case 'x':
-			perms |= R_IO_EXEC;
+			perms &= ~R_IO_EXEC;
+			r_config_set (r.config, "io.exec", "false");
 			break;
 		default:
 			help++;
@@ -942,6 +943,9 @@ int main(int argc, char **argv, char **envp) {
 					}
 					if (fh) {
 						iod = r.io ? r_io_desc_get (r.io, fh->fd) : NULL;
+						if (perms & R_IO_EXEC) {
+							iod->flags |= R_IO_EXEC;
+						}
 						if (run_anal > 0) {
 #if USE_THREADS
 							if (!rabin_th)
@@ -953,14 +957,16 @@ int main(int argc, char **argv, char **envp) {
 									filepath = file? strstr (file, "://"): NULL;
 									filepath = filepath ? filepath + 3 : pfile;
 								}
-								if (r.file && iod && (iod->fd == r.file->fd) && iod->name)
+								if (r.file && iod && (iod->fd == r.file->fd) && iod->name) {
 									filepath = iod->name;
-
+								}
 								/* Load rbin info from r2 dbg:// or r2 /bin/ls */
 								/* the baddr should be set manually here */
 								(void)r_core_bin_load (&r, filepath, baddr);
 							}
 						} else {
+							r_io_map_new (r.io, iod->fd, perms, 0LL, 0LL, r_io_desc_size (iod));
+							// r_io_map_new (r.io, iod->fd, iod->flags, 0LL, 0LL, r_io_desc_size (iod));
 							if (run_anal < 0) {
 								// PoC -- must move -rk functionalitiy into rcore
 								// this may be used with caution (r2 -nn $FILE)

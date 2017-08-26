@@ -58,21 +58,13 @@ typedef void (*cbOnIterMap) (RIO *io, int fd, ut64 addr, ut8 *buf, int len, RIOM
 
 static void onIterMap(SdbListIter* iter, RIO* io, ut64 vaddr, ut8* buf,
 		       int len, int match_flg, cbOnIterMap op, void *user) {
-	ut64 vendaddr;
-	if (!io || !buf || len < 1) {
-		return;
-	}
-	if (!iter && io->desc) {
-		// end of list
+	ut64 vendaddr = UT64_MAX;
+	if (!io || !iter || !buf || len < 1) {
 		return;
 	}
 	// this block is not that much elegant
 	if (UT64_ADD_OVFCHK (len - 1, vaddr)) {
-		// needed for edge-cases
-		int nlen;
-		// add a test for this block
-		vendaddr = UT64_MAX;
-		nlen = (int) (UT64_MAX - vaddr + 1);
+		int nlen = (int) (UT64_MAX - vaddr + 1);
 		onIterMap (iter->p, io, 0LL, buf + nlen, len - nlen, match_flg, op, user);
 	} else {
 		vendaddr = vaddr + len - 1;
@@ -170,17 +162,10 @@ R_API void r_io_free(RIO *io) {
 }
 
 R_API RIODesc *r_io_open_as(RIO *io, const char *urihandler, const char *file, int flags, int mode) {
-	RIODesc *ret;
-	char *uri;
-	int urilen, hlen = strlen (urihandler);
-	urilen = hlen + strlen (file) + 5;
-	uri = malloc (urilen);
-	if (!uri)
-		return NULL;
-	if (hlen > 0)
-		snprintf (uri, urilen, "%s://%s", urihandler, file);
-	else strncpy (uri, file, urilen);
-	ret = r_io_open_nomap (io, uri, flags, mode);
+	char *uri = (urihandler && *urihandler)
+		? r_str_newf ("%s://%s", urihandler, file)
+		: strdup (file);
+	RIODesc *ret = r_io_open_nomap (io, uri, flags, mode);
 	free (uri);
 	return ret;
 }
@@ -372,8 +357,8 @@ R_API RIOAccessLog *r_io_al_vwrite_at(RIO* io, ut64 vaddr, const ut8* buf, int l
 	if (!io->maps || !(log = r_io_accesslog_new ())) {
 		return NULL;
 	}
-	log->buf = buf;
-	onIterMap (io->maps->tail, io, vaddr, buf, len, R_IO_WRITE, al_fd_write_at_wrap, log);
+	log->buf = (ut8*)buf;
+	onIterMap (io->maps->tail, io, vaddr, (ut8*)buf, len, R_IO_WRITE, al_fd_write_at_wrap, log);
 	return log;
 }
 
@@ -631,7 +616,9 @@ R_API ut64 r_io_seek(RIO* io, ut64 offset, int whence) {
 		break;
 	case R_IO_SEEK_END:
 	default:
-		io->off = UT64_MAX;
+		if (io && io->desc && io->desc->plugin && io->desc->plugin->lseek) {
+			return io->off = io->desc->plugin->lseek (io, io->desc, offset, whence);
+		}
 		break;
 	}
 	return io->off;
