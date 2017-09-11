@@ -67,7 +67,8 @@ R_API RList *r_core_asm_strsearch(RCore *core, const char *input, ut64 from, ut6
 	char *tok, *tokens[1024], *code = NULL, *ptr;
 	int idx, tidx = 0, len;
 	int tokcount, matchcount, count = 0;
-	int matches = 0, addrbytes = core->assembler->addrbytes;
+	int matches = 0;
+	const int addrbytes = core->io->addrbytes;
 
 	if (!*input) {
 		return NULL;
@@ -101,9 +102,10 @@ R_API RList *r_core_asm_strsearch(RCore *core, const char *input, ut64 from, ut6
 		if (r_cons_is_breaked ()) {
 			break;
 		}
-		if (!r_io_read_at (core->io, at, buf, core->blocksize)) {
+		if (!r_io_is_valid_offset (core->io, at, 0)) {
 			break;
 		}
+		(void)r_io_read_at (core->io, at, buf, core->blocksize);
 		idx = 0, matchcount = 0;
 		while (addrbytes * (idx + 1) <= core->blocksize) {
 			ut64 addr = at + idx;
@@ -387,7 +389,7 @@ R_API RList *r_core_asm_bwdisassemble(RCore *core, ut64 addr, int n, int len) {
 	ut64 at;
 	ut32 idx = 0, hit_count;
 	int numinstr, asmlen, ii;
-	int addrbytes = core->assembler->addrbytes;
+	const int addrbytes = core->io->addrbytes;
 	RAsmCode *c;
 	RList *hits = r_core_asm_hit_list_new();
 	if (!hits) return NULL;
@@ -400,21 +402,15 @@ R_API RList *r_core_asm_bwdisassemble(RCore *core, ut64 addr, int n, int len) {
 
 	buf = (ut8 *)malloc (len);
 	if (!buf) {
-		if (hits) {
-			r_list_free (hits);
-		}
+		r_list_free (hits);
 		return NULL;
 	} else if (!hits) {
 		free (buf);
 		return NULL;
 	}
-	len = len > addr ? addr : len;
-	if (!r_io_read_at (core->io, addr - len, buf, len)) {
-		if (hits) {
-			r_list_free (hits);
-		}
-		free (buf);
+	if (!r_io_read_at (core->io, addr - len / addrbytes, buf, len)) {
 		r_list_free (hits);
+		free (buf);
 		return NULL;
 	}
 

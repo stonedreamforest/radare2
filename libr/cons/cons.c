@@ -308,6 +308,7 @@ R_API RCons *r_cons_new() {
 	if (I.refcnt != 1) {
 		return &I;
 	}
+	I.rgbstr = r_cons_rgb_str_off;
 	I.line = r_line_new ();
 	I.highlight = NULL;
 	I.event_interrupt = NULL;
@@ -506,7 +507,7 @@ R_API void r_cons_reset() {
 	I.grep.line = -1;
 	I.grep.sort = -1;
 	I.grep.sort_invert = false;
-	I.grep.str = NULL;
+	R_FREE (I.grep.str);
 	ZERO_FILL (I.grep.tokens);
 	I.grep.tokens_used = 0;
 }
@@ -583,8 +584,9 @@ R_API void r_cons_pop() {
 		if (data->grep) {
 			memcpy (&I.grep, data->grep, sizeof (RConsGrep));
 			if (data->grep->str) {
-				free (I.grep.str);
-				I.grep.str = data->grep->str;
+				char *old = I.grep.str;
+				I.grep.str = strdup (data->grep->str);
+				R_FREE (old);
 			}
 		}
 		cons_stack_free ((void *)data);

@@ -521,9 +521,11 @@ static int core_anal_fcn(RCore *core, ut64 at, ut64 from, int reftype, int depth
 				goto error;
 			}
 		}
-		if (!r_io_read_at (core->io, at + delta, buf, buflen)) {
+		// TODO bring back old hack, should be fixed
+		if (!r_io_read_at (core->io, at + delta, buf, 4)) {
 			goto error;
 		}
+		(void)r_io_read_at (core->io, at + delta, buf, buflen);
 		if (r_cons_is_breaked ()) {
 			break;
 		}
@@ -1436,10 +1438,9 @@ R_API int r_core_anal_fcn(RCore *core, ut64 at, ut64 from, int reftype, int dept
 				}
 			}
 			return true;
-		} else {
-			// split function if overlaps
-			r_anal_fcn_resize (fcn, at - fcn->addr);
 		}
+		// split function if overlaps
+		r_anal_fcn_resize (fcn, at - fcn->addr);
 	}
 	return core_anal_fcn (core, at, from, reftype, depth);
 }
@@ -1906,9 +1907,9 @@ static int fcn_list_default(RCore *core, RList *fcns, bool quiet) {
 	RAnalFunction *fcn;
 	r_list_foreach (fcns, iter, fcn) {
 		fcn_print_default (core, fcn, quiet);
-	}
-	if (quiet) {
-		r_cons_newline ();
+		if (quiet) {
+			r_cons_newline ();
+		}
 	}
 	return 0;
 }
@@ -2467,6 +2468,7 @@ static int core_anal_followptr(RCore *core, int type, ut64 at, ut64 ptr, ut64 re
 	}
 	wordsize = (int)(core->anal->bits / 8);
 	if (!r_io_read_i (core->io, ptr, &dataptr, wordsize, false)) {
+		eprintf ("core_anal_followptr: Cannot read word at destination\n");
 		return false;
 	}
 	return core_anal_followptr (core, type, at, dataptr, ref, code, depth - 1);
@@ -2554,6 +2556,7 @@ R_API int r_core_anal_search(RCore *core, ut64 from, ut64 to, ut64 ref, int mode
 			}
 			// TODO: this can be probably enhaced
 			if (!r_io_read_at (core->io, at, buf, core->blocksize)) {
+				eprintf ("Failed to read at 0x%08" PFMT64x "\n", at);
 				break;
 			}
 			for (i = bckwrds ? (core->blocksize - OPSZ - 1) : 0;
@@ -2672,10 +2675,10 @@ R_API int r_core_anal_search_xrefs(RCore *core, ut64 from, ut64 to, int rad) {
 	at = from;
 	while (at < to && !r_cons_is_breaked ()) {
 		int i = 0, ret = core->blocksize;
-		if (!r_io_read_at (core->io, at, buf, core->blocksize) || 
-			(at + core->blocksize - OPSZ < to)) {
+		if (!r_io_is_valid_offset (core->io, at, 0)) {
 			break;
 		}
+		(void)r_io_read_at (core->io, at, buf, core->blocksize);
 		while (at + i < to && i < ret - OPSZ && !r_cons_is_breaked ()) {
 			RAnalRefType type;
 			ut64 xref_from, xref_to;
@@ -2684,7 +2687,7 @@ R_API int r_core_anal_search_xrefs(RCore *core, ut64 from, ut64 to, int rad) {
 			ret = r_anal_op (core->anal, &op, at + i, buf + i, core->blocksize - i);
 			i += ret > 0 ? ret : 1;
 			if (ret <= 0 || at + i > to) {
-				continue;
+				break;
 			}
 			// Get reference type and target address
 			type = R_ANAL_REF_TYPE_NULL;
@@ -2735,22 +2738,12 @@ R_API int r_core_anal_search_xrefs(RCore *core, ut64 from, ut64 to, int rad) {
 			if (type == R_ANAL_REF_TYPE_NULL) {
 				continue;
 			}
-			if (!r_io_is_valid_offset (core->io, xref_to, R_IO_EXEC)) {	//review me
-				continue;
-			}
 			if (cfg_debug) {
 				if (!r_debug_map_get (core->dbg, xref_to)) {
 					continue;
 				}
 			} else if (core->io->va) {
-				SdbListIter *iter = NULL;
-				RIOSection *s;
-				ls_foreach (core->io->sections, iter, s) {
-					if (xref_to >= s->vaddr && xref_to < s->vaddr + s->vsize) {
-						if (s->vaddr) break;
-					}
-				}
-				if (!iter) {
+				if (!r_io_is_valid_offset (core->io, xref_to, 0)) {
 					continue;
 				}
 			}
@@ -3351,33 +3344,34 @@ static ut64 esilbreak_last_data = UT64_MAX;
 
 static ut64 ntarget = UT64_MAX;
 
+// TODO differentiate endian-aware mem_read with other reads; move ntarget handling to another function
 static int esilbreak_mem_read(RAnalEsil *esil, ut64 addr, ut8 *buf, int len) {
 	ut8 str[128];
 	if (addr != UT64_MAX) {
 		esilbreak_last_read = addr;
 	}
-	if (myvalid (mycore->io, addr)) {
-		ut8 buf[8];
+	if (myvalid (mycore->io, addr) && r_io_read_at (mycore->io, addr, (ut8*)buf, len)) {
 		ut64 refptr;
-		if (len == 8) {
-			if (!r_io_read_at (mycore->io, addr, (ut8*)buf, sizeof (buf))) {
-				/* invalid read */
-				refptr = UT64_MAX;
-			} else {
-				refptr = r_read_ble64 (buf, esil->anal->big_endian);
-				esilbreak_last_data = refptr;
-			}
-		} else {
-			if (!r_io_read_at (mycore->io, addr, (ut8*)buf, sizeof (buf))) {
-				/* invalid read */
-				refptr = UT64_MAX;
-			} else {
-				refptr = (ut64)r_read_ble32 (buf, esil->anal->big_endian);
-				esilbreak_last_data = refptr;
-			}
+		bool trace = true;
+		switch (len) {
+		case 2:
+			esilbreak_last_data = refptr = (ut64)r_read_ble16 (buf, esil->anal->big_endian);
+			break;
+		case 4:
+			esilbreak_last_data = refptr = (ut64)r_read_ble32 (buf, esil->anal->big_endian);
+			break;
+		case 8:
+			esilbreak_last_data = refptr = r_read_ble64 (buf, esil->anal->big_endian);
+			break;
+		default:
+			trace = false;
+			r_io_read_at (mycore->io, addr, (ut8*)buf, len);
+			break;
 		}
+
+		// TODO incorrect
 		bool validRef = false;
-		if (myvalid (mycore->io, refptr)) {
+		if (trace && myvalid (mycore->io, refptr)) {
 			if (ntarget == UT64_MAX || ntarget == refptr) {
 				r_core_cmdf (mycore, "axd 0x%"PFMT64x" 0x%"PFMT64x,
 						(ut64)refptr, esil->address);

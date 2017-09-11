@@ -50,37 +50,15 @@ R_API int r_io_section_exists_for_id(RIO *io, ut32 id) {
 	return false;
 }
 
-// @deprecate
-RIOSection *_section_chk_dup(RIO *io, ut64 paddr, ut64 vaddr, ut64 size, ut64 vsize, int flags, const char *name, ut32 bin_id, int fd) {
-	RIOSection *sec;
-	SdbListIter *iter;
-	char sname[32];
-	if (!name) {
-		snprintf (sname, sizeof (sname), "section.0x016%"PFMT64x "", vaddr);
-	}
-	ls_foreach (io->sections, iter, sec) {
-		if ((sec->paddr == paddr) && (sec->vaddr == vaddr) && (sec->size == size) &&
-		    (sec->vsize == vsize) && (sec->flags == flags) && (sec->bin_id == bin_id) &&
-		    (sec->fd == fd) && !strcmp ((name? name: sname), sec->name)) {
-			return sec;
-		}
-	}
-	return NULL;
-}
-
 R_API RIOSection *r_io_section_add(RIO *io, ut64 paddr, ut64 vaddr, ut64 size,
 				    ut64 vsize, int flags, const char *name,
 				    ut32 bin_id, int fd) {
 	if (!io || !io->sections || !io->sec_ids || !r_io_desc_get (io, fd) ||
-		UT64_ADD_OVFCHK (size, paddr) || UT64_ADD_OVFCHK (size, vaddr)) {
+		UT64_ADD_OVFCHK (size, paddr) || UT64_ADD_OVFCHK (size, vaddr) || !vsize) {
 		return NULL;
 	}
-	RIOSection *sec = _section_chk_dup (io, paddr, vaddr, size, vsize, flags, name, bin_id, fd);
-	if (!sec) {
-		sec = R_NEW0 (RIOSection);
-		if (!sec) {
-			return NULL;
-		}
+	RIOSection *sec = R_NEW0 (RIOSection);
+	if (sec) {
 		sec->paddr = paddr;
 		sec->vaddr = vaddr;
 		sec->size = size;
@@ -417,59 +395,7 @@ R_API bool r_io_section_priorize_bin(RIO *io, ut32 bin_id) {
 	return true;
 }
 
-static bool _create_null_map(RIO *io, RIOSection *sec, ut64 at) {
-	RIOMap *map = NULL;
-	RIODesc *desc = NULL;
-	char *uri = NULL;
 
-	if (!io || !sec) {
-		return false;
-	}
-	uri = r_str_newf ("null://%"PFMT64u "", sec->vsize - sec->size);
-	desc = r_io_open_at (io, uri, sec->flags, 664, at);
-	free (uri);
-	if (!desc) {
-		return false;
-	}
-	// this works, because new maps are allways born on the top
-	map = r_io_map_get (io, at);
-	// check if the mapping failed
-	if (!map) {
-		r_io_desc_close (desc);
-		return false;
-	}
-	// let the section refere to the map as a memory-map
-	sec->memmap = map->id;
-	map->name = r_str_newf ("mmap.%s", sec->name);
-	return true;
-}
-
-static bool _create_file_map(RIO *io, RIOSection *sec, ut64 size, bool patch) {
-	RIOMap *map = NULL;
-	int flags = 0;
-	RIODesc *desc;
-	if (!io || !sec) {
-		return false;
-	}
-	desc = r_io_desc_get (io, sec->fd);
-	if (!desc) {
-		return false;
-	}
-	flags = sec->flags;
-	//create file map for patching
-	if (patch) {
-		//add -w to the map for patching if needed
-		//if the file was not opened with -w desc->flags won't have that bit active
-		flags = flags | desc->flags;
-	}
-	map = r_io_map_add (io, sec->fd, flags, sec->paddr, sec->vaddr, size);
-	if (map) {
-		sec->filemap = map->id;
-		map->name = r_str_newf ("fmap.%s", sec->name);
-		return true;
-	}
-	return false;
-}
 
 static bool _section_apply_for_anal_patch(RIO *io, RIOSection *sec, bool patch) {
 	ut64 at;
@@ -480,11 +406,11 @@ static bool _section_apply_for_anal_patch(RIO *io, RIOSection *sec, bool patch) 
 			at = sec->vaddr + sec->size;
 			// TODO: harden this, handle mapslit
 			// craft the uri for the null-fd
-			if (!_create_null_map (io, sec, at)) {
+			if (!r_io_create_mem_map (io, sec, at, true)) {
 				return false;
 			}
 			// we need to create this map for transfering the flags, no real remapping here
-			if (!_create_file_map (io, sec, sec->size, patch)) {
+			if (!r_io_create_file_map (io, sec, sec->size, patch)) {
 				return false;
 			}
 			return true;
@@ -495,7 +421,7 @@ static bool _section_apply_for_anal_patch(RIO *io, RIOSection *sec, bool patch) 
 	} else {
 		// same as above
 		if (!sec->filemap) {
-			if (_create_file_map (io, sec, sec->vsize, patch)) {
+			if (r_io_create_file_map (io, sec, sec->vsize, patch)) {
 				return true;
 			}
 		}
@@ -641,7 +567,9 @@ static bool _section_reapply_for_emul(RIO *io, RIOSection *sec) {
 		uri = r_str_newf ("malloc://%"PFMT64u, sec->vsize);
 		r_io_open_at (io, uri, sec->flags | R_IO_WRITE, 664, sec->vaddr);
 		map = r_io_map_get (io, sec->vaddr);
-		r_io_use_fd (io, map->fd);
+		if (map) {
+			(void)r_io_use_fd (io, map->fd);
+		}
 		r_io_pwrite_at (io, sec->size, buf, (int) size);
 		free (buf);
 		if (sec->size > sec->vsize) {
@@ -656,11 +584,13 @@ static bool _section_reapply_for_emul(RIO *io, RIOSection *sec) {
 		}
 		r_io_use_fd (io, sec->fd);
 		r_io_pread_at (io, sec->paddr, buf, (int) size);
-		r_io_use_fd (io, map->fd);
+		if (map) {
+			(void)r_io_use_fd (io, map->fd);
+			sec->filemap = sec->memmap = map->id;
+		}
 		r_io_pwrite_at (io, 0LL, buf, (int) size);
 		free (buf);
 		io->desc = oldesc;
-		sec->filemap = sec->memmap = map->id;
 		return true;
 	}
 	if (!sec->filemap) {
@@ -726,6 +656,7 @@ R_API bool r_io_section_apply_bin(RIO *io, ut32 bin_id, RIOSectionApplyMethod me
 			_section_apply (io, sec, method);
 		}
 	}
+	r_io_map_calculate_skyline (io);
 	return ret;
 }
 

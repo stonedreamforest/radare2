@@ -1650,6 +1650,7 @@ R_API bool r_core_init(RCore *core) {
 	core->incomment = false;
 	core->config = NULL;
 	core->http_up = false;
+	ZERO_FILL (core->root_cmd_descriptor);
 	core->print = r_print_new ();
 	core->print->user = core;
 	core->print->num = core->num;
@@ -2194,7 +2195,7 @@ reaccept:
 					file = r_core_file_open (core, (const char *)ptr, perm, 0);
 					if (file) {
 						r_core_bin_load (core, NULL, baddr);
-						r_io_map_add (core->io, file->fd, perm, 0, 0, r_io_fd_size (core->io, file->fd));
+						r_io_map_add (core->io, file->fd, perm, 0, 0, r_io_fd_size (core->io, file->fd), true);
 						if (core->file) {
 							pipefd = core->file->fd;
 						} else {

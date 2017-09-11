@@ -298,7 +298,7 @@ R_API RCoreFile *r_core_file_open(RCore *core, const char *file, int flags, ut64
 R_API RCoreFile *r_core_file_open_many(RCore *r, const char *file, int flags, ut64 loadaddr);
 R_API RCoreFile *r_core_file_get_by_fd(RCore *core, int fd);
 R_API int r_core_file_close(RCore *core, RCoreFile *fh);
-R_API int r_core_file_close_fd(RCore *core, int fd);
+R_API bool r_core_file_close_fd(RCore *core, int fd);
 R_API int r_core_file_list(RCore *core, int mode);
 R_API int r_core_file_binlist(RCore *core);
 R_API int r_core_file_bin_raise(RCore *core, ut32 num);
@@ -548,7 +548,7 @@ R_API int r_core_patch (RCore *core, const char *patch);
 
 R_API void r_core_hack_help(const RCore *core);
 R_API int r_core_hack(RCore *core, const char *op);
-R_API int r_core_dump(RCore *core, const char *file, ut64 addr, ut64 size, int append);
+R_API bool r_core_dump(RCore *core, const char *file, ut64 addr, ut64 size, int append);
 R_API void r_core_diff_show(RCore *core, RCore *core2);
 R_API void r_core_clippy(const char *msg);
 

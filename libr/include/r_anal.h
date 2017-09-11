@@ -591,7 +591,6 @@ typedef struct r_anal_t {
 	char *cpu;
 	char *os;
 	int bits;
-	int addrbytes;
 	int lineswidth; // wtf
 	int big_endian;
 	int split; // used only from core
@@ -1037,6 +1036,7 @@ typedef struct r_anal_esil_t {
 	char *mdev_range; // string containing the r_str_range to match for read/write accesses
 	bool (*cmd)(ESIL *esil, const char *name, ut64 a0, ut64 a1);
 	void *user;
+	int stack_fd;
 	RList *sessions; // <RAnalEsilSession*>
 } RAnalEsil;
 
@@ -1319,6 +1319,7 @@ R_API int r_anal_fcn_add_bb(RAnal *anal, RAnalFunction *fcn,
 		ut64 addr, ut64 size,
 		ut64 jump, ut64 fail, int type, RAnalDiff *diff);
 R_API bool r_anal_check_fcn(RAnal *anal, ut8 *buf, ut16 bufsz, ut64 addr, ut64 low, ut64 high);
+R_API void r_anal_fcn_update_tinyrange_bbs(RAnalFunction *fcn);
 
 /* locals */
 #if 0

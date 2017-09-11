@@ -252,7 +252,9 @@ static bool string_filter(RCore *core, const char *str) {
 		if (str && *str) {
 			if (!strstr (str+1, "%"))
 				return false;
-		} else return false;
+		} else {
+			return false;
+		}
 		break;
 	case 'u': // URLs
 		if (!strstr (str, "://")) {
@@ -310,6 +312,7 @@ static void _print_strings(RCore *r, RList *list, int mode, int va) {
 	int minstr = r_config_get_i (r->config, "bin.minstr");
 	int maxstr = r_config_get_i (r->config, "bin.maxstr");
 	RBin *bin = r->bin;
+	RBinObject *obj = r_bin_cur_object (bin);
 	RListIter *iter;
 	RBinString *string;
 	RBinSection *section;
@@ -343,7 +346,7 @@ static void _print_strings(RCore *r, RList *list, int mode, int va) {
 			continue;
 		}
 
-		section = r_bin_get_section_at (r_bin_cur_object (bin), paddr, 0);
+		section = r_bin_get_section_at (obj, paddr, 0);
 		section_name = section ? section->name : "unknown";
 		type_string = r_bin_string_type (string->type);
 		if (IS_MODE_SET (mode)) {
@@ -397,7 +400,7 @@ static void _print_strings(RCore *r, RList *list, int mode, int va) {
 						r_cons_printf ("\"%s\"", utfName? utfName: "");
 					}
 					r_cons_printf ("]");
-					free (block_list);
+					R_FREE (block_list);
 				}
 			}
 			r_cons_printf ("}");
@@ -495,10 +498,10 @@ static bool bin_strings(RCore *r, int mode, int va) {
 		return false;
 	}
 	if (!r_config_get_i (r->config, "bin.strings")) {
-		return 0;
+		return false;
 	}
 	if (!plugin) {
-		return 0;
+		return false;
 	}
 	if (plugin->info && plugin->name) {
 		if (strcmp (plugin->name, "any") == 0 && !rawstr) {
@@ -1989,7 +1992,12 @@ static int bin_sections(RCore *r, int mode, ut64 laddr, int va, ut64 at, const c
 	int fd = -1;
 	sections = r_bin_get_sections (r->bin);
 	bool inDebugger = r_config_get_i (r->config, "cfg.debug");
+	SdbHash *dup_chk_ht = ht_new (NULL, NULL, NULL);
+	bool ret = false;
 
+	if (!dup_chk_ht) {
+		return false;
+	}
 	if (IS_MODE_JSON (mode)) r_cons_printf ("[");
 	else if (IS_MODE_RAD (mode) && !at) r_cons_printf ("fs sections\n");
 	else if (IS_MODE_NORMAL (mode) && !at) r_cons_printf ("[Sections]\n");
@@ -2061,7 +2069,7 @@ static int bin_sections(RCore *r, int mode, ut64 laddr, int va, ut64 at, const c
 				snprintf (str, sizeof(str) - 1, "section_end.%s", section->name);
 			}
 
-			r_flag_set (r->flags, str, addr + section->size, 0);
+			r_flag_set (r->flags, str, addr + section->vsize, 0);
 			if (section->arch || section->bits) {
 				const char *arch = section->arch;
 				int bits = section->bits;
@@ -2089,17 +2097,23 @@ static int bin_sections(RCore *r, int mode, ut64 laddr, int va, ut64 at, const c
 			}
 			r_meta_add (r->anal, R_META_TYPE_COMMENT, addr, addr, str);
 			if (section->add) {
-				r_io_section_add (r->io, section->paddr, addr,
-						  section->size, section->vsize,
-						  section->srwx, section->name,
-						  r->bin->cur->id, fd);
+				char dup_chk_key[256];
+				snprintf (dup_chk_key, sizeof dup_chk_key,
+					"%"PFMT64x".%"PFMT64x".%"PFMT64x".%"PFMT64x".%"PFMT32u".%s.%"PFMT32u".%d",
+					section->paddr, addr, section->size, section->vsize, section->srwx, section->name, r->bin->cur->id, fd);
+				if (!ht_find (dup_chk_ht, dup_chk_key, NULL) && r_io_section_add (r->io, section->paddr, addr,
+						section->size, section->vsize,
+						section->srwx, section->name,
+						r->bin->cur->id, fd)) {
+					ht_insert (dup_chk_ht, dup_chk_key, NULL);
+				}
 			}
 		} else if (IS_MODE_SIMPLE (mode)) {
 			char *hashstr = NULL;
 			if (chksum) {
 				ut8 *data = malloc (section->size);
 				if (!data) {
-					return false;
+					goto out;
 				}
 				ut32 datalen = section->size;
 				r_io_pread_at (r->io, section->paddr, data, datalen);
@@ -2119,7 +2133,7 @@ static int bin_sections(RCore *r, int mode, ut64 laddr, int va, ut64 at, const c
 			if (chksum) {
 				ut8 *data = malloc (section->size);
 				if (!data) {
-					return false;
+					goto out;
 				}
 				ut32 datalen = section->size;
 				r_io_pread_at (r->io, section->paddr, data, datalen);
@@ -2178,7 +2192,7 @@ static int bin_sections(RCore *r, int mode, ut64 laddr, int va, ut64 at, const c
 				r_cons_printf ("f %s.section.%s %"PFMT64d" 0x%08"PFMT64x"\n",
 						r->bin->prefix, section->name, section->size, addr);
 				r_cons_printf ("f %s.section_end.%s 1 0x%08"PFMT64x"\n",
-						r->bin->prefix, section->name, addr + section->size);
+						r->bin->prefix, section->name, addr + section->vsize);
 				r_cons_printf ("CC section %i va=0x%08"PFMT64x" pa=0x%08"PFMT64x" sz=%"PFMT64d" vsz=%"PFMT64d" "
 						"rwx=%s %s.%s @ 0x%08"PFMT64x"\n",
 						i, addr, section->paddr, section->size, section->vsize,
@@ -2188,7 +2202,7 @@ static int bin_sections(RCore *r, int mode, ut64 laddr, int va, ut64 at, const c
 				r_cons_printf ("f section.%s %"PFMT64d" 0x%08"PFMT64x"\n",
 						section->name, section->size, addr);
 				r_cons_printf ("f section_end.%s 1 0x%08"PFMT64x"\n",
-						section->name, addr + section->size);
+						section->name, addr + section->vsize);
 				r_cons_printf ("CC section %i va=0x%08"PFMT64x" pa=0x%08"PFMT64x" sz=%"PFMT64d" vsz=%"PFMT64d" "
 						"rwx=%s %s @ 0x%08"PFMT64x"\n",
 						i, addr, section->paddr, section->size, section->vsize,
@@ -2198,7 +2212,9 @@ static int bin_sections(RCore *r, int mode, ut64 laddr, int va, ut64 at, const c
 			char *hashstr = NULL, str[128];
 			if (chksum) {
 				ut8 *data = malloc (section->size);
-				if (!data) return false;
+				if (!data) {
+					goto out;
+				}
 				ut32 datalen = section->size;
 				// VA READ IS BROKEN?
 				r_io_pread_at (r->io, section->paddr, data, datalen);
@@ -2238,7 +2254,7 @@ static int bin_sections(RCore *r, int mode, ut64 laddr, int va, ut64 at, const c
 		}
 		i++;
 	}
-	if (r->bin && r->bin->cur && r->io && r->io->desc && r->io->desc->plugin && !r->io->desc->plugin->isdbg) {
+	if (r->bin && r->bin->cur && r->io && !r_io_desc_is_dbg (r->io->desc)) {
 		r_io_section_apply_bin (r->io, r->bin->cur->id, R_IO_SECTION_APPLY_FOR_ANALYSIS);
 	}
 	if (IS_MODE_JSON (mode)) {
@@ -2246,7 +2262,11 @@ static int bin_sections(RCore *r, int mode, ut64 laddr, int va, ut64 at, const c
 	} else if (IS_MODE_NORMAL (mode) && !at) {
 		r_cons_printf ("\n%i sections\n", i);
 	}
-	return true;
+
+	ret = true;
+out:
+	ht_free (dup_chk_ht);
+	return ret;
 }
 
 static int bin_fields(RCore *r, int mode, int va) {
@@ -2850,7 +2870,7 @@ static void bin_pe_resources(RCore *r, int mode) {
 	}
 	while (true) {
 		const char *timestrKey = sdb_fmt (0, "resource.%d.timestr", index);
-		const char *paddrKey = sdb_fmt (1, "resource.%d.paddr", index);
+		const char *vaddrKey = sdb_fmt (1, "resource.%d.vaddr", index);
 		const char *sizeKey  = sdb_fmt (2, "resource.%d.size", index);
 		const char *typeKey  = sdb_fmt (3, "resource.%d.type", index);
 		const char *languageKey = sdb_fmt (4, "resource.%d.language", index);
@@ -2859,7 +2879,7 @@ static void bin_pe_resources(RCore *r, int mode) {
 		if (!timestr) {
 			break;
 		}
-		ut64 paddr = sdb_num_get (sdb, paddrKey, 0);
+		ut64 vaddr = sdb_num_get (sdb, vaddrKey, 0);
 		int size = (int)sdb_num_get (sdb, sizeKey, 0);
 		int name = (int)sdb_num_get (sdb, nameKey, 0);
 		char *type = sdb_get (sdb, typeKey, 0);
@@ -2867,19 +2887,19 @@ static void bin_pe_resources(RCore *r, int mode) {
 
 		if (IS_MODE_SET (mode)) {
 			const char *name = sdb_fmt (4, "resource.%d", index);
-			r_flag_set (r->flags, name, paddr, size);
+			r_flag_set (r->flags, name, vaddr, size);
 		} else if (IS_MODE_RAD (mode)) {
-			r_cons_printf ("f resource.%d %d 0x%08"PFMT32x"\n", index, size, paddr);
+			r_cons_printf ("f resource.%d %d 0x%08"PFMT32x"\n", index, size, vaddr);
 		} else if (IS_MODE_JSON (mode)) {
 			r_cons_printf("%s{\"name\":%d,\"index\":%d, \"type\":\"%s\","
-					"\"paddr\":%"PFMT32d", \"size\":%d, \"lang\":\"%s\"}",
-					index? ",": "", name, index, type, paddr, size, lang);
+					"\"vaddr\":%"PFMT32d", \"size\":%d, \"lang\":\"%s\"}",
+					index? ",": "", name, index, type, vaddr, size, lang);
 		} else {
 			char *humanSize = r_num_units (NULL, size);
 			r_cons_printf ("Resource %d\n", index);
 			r_cons_printf ("\tname: %d\n", name);
 			r_cons_printf ("\ttimestamp: %s\n", timestr);
-			r_cons_printf ("\tpaddr: 0x%08"PFMT32x"\n", paddr);
+			r_cons_printf ("\tvaddr: 0x%08"PFMT32x"\n", vaddr);
 			r_cons_printf ("\tsize: %s\n", humanSize);
 			r_cons_printf ("\ttype: %s\n", type);
 			r_cons_printf ("\tlanguage: %s\n", lang);
@@ -3097,7 +3117,8 @@ R_API int r_core_bin_set_arch_bits(RCore *r, const char *name, const char * arch
 		return false;
 	}
 	curfile = r_bin_cur (r->bin);	
-	if (curfile != binfile) {
+	//set env if the binfile changed or we are dealing with xtr
+	if (curfile != binfile || binfile->curxtr) {
 		r_core_bin_set_cur (r, binfile);
 		return r_core_bin_set_env (r, binfile);
 	}
@@ -3119,7 +3140,7 @@ R_API int r_core_bin_update_arch_bits(RCore *r) {
 	}
 	binfile = r_core_bin_cur (r);
 	name = binfile ? binfile->file : NULL;
-	if (r && r->bin && r->bin->binxtrs) {
+	if (binfile && binfile->curxtr) {
 		r_anal_hint_clear (r->anal);
 	}
 	return r_core_bin_set_arch_bits (r, name, arch, bits);

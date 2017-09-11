@@ -32,7 +32,7 @@
 #define MAX_JMPTBL_JMP 10000
 
 #define DB a->sdb_fcns
-#define EXISTS(x, ...) snprintf (key, sizeof(key) - 1, x, ## __VA_ARGS__), sdb_exists (DB, key)
+#define EXISTS(x, ...) snprintf (key, sizeof (key) - 1, x, ## __VA_ARGS__), sdb_exists (DB, key)
 #define SETKEY(x, ...) snprintf (key, sizeof (key) - 1, x, ## __VA_ARGS__);
 
 #define VERBOSE_DELAY if (0)
@@ -59,7 +59,7 @@ static int cmpaddr(const void *_a, const void *_b) {
 	return (a->addr - b->addr);
 }
 
-static void update_tinyrange_bbs(RAnalFunction *fcn) {
+R_API void r_anal_fcn_update_tinyrange_bbs(RAnalFunction *fcn) {
 	RAnalBlock *bb;
 	RListIter *iter;
 	r_list_sort (fcn->bbs, &cmpaddr);
@@ -94,7 +94,7 @@ R_API int r_anal_fcn_resize(RAnalFunction *fcn, int newsize) {
 			bb->fail = UT64_MAX;
 		}
 	}
-	update_tinyrange_bbs (fcn);
+	r_anal_fcn_update_tinyrange_bbs (fcn);
 	return true;
 }
 
@@ -299,7 +299,7 @@ static int fcn_recurse(RAnal *anal, RAnalFunction *fcn, ut64 addr, ut8 *buf, ut6
 		ut8 *bbuf = malloc (MAXBBSIZE);\
 		anal->iob.read_at (anal->iob.io, x, bbuf, MAXBBSIZE);\
 		ret = fcn_recurse (anal, fcn, x, bbuf, MAXBBSIZE, depth - 1);\
-		update_tinyrange_bbs (fcn);\
+		r_anal_fcn_update_tinyrange_bbs (fcn);\
 		free (bbuf);\
 }
 
@@ -353,7 +353,8 @@ static ut64 search_reg_val(RAnal *anal, ut8 *buf, ut64 len, ut64 addr, char *reg
 		0
 	};
 	ut64 ret = UT64_MAX;
-	for (offs = 0; offs < len; offs += anal->addrbytes * oplen) {
+	const int addrbytes = anal->iob.io ? anal->iob.io->addrbytes : 1;
+	for (offs = 0; offs < len; offs += addrbytes * oplen) {
 		r_anal_op_fini (&op);
 		if ((oplen = r_anal_op (anal, &op, addr + offs, buf + offs, len - offs)) < 1) {
 			break;
@@ -548,9 +549,9 @@ static int walk_switch(RAnal *anal, RAnalFunction *fcn, ut64 from, ut64 at) {
 }
 
 static int fcn_recurse(RAnal *anal, RAnalFunction *fcn, ut64 addr, ut8 *buf, ut64 len, int depth) {
-	int continue_after_jump = anal->opt.afterjmp;
-	int noncode = anal->opt.noncode;
-	int addrbytes = anal->addrbytes;
+	const int continue_after_jump = anal->opt.afterjmp;
+	const int noncode = anal->opt.noncode;
+	const int addrbytes = anal->iob.io ? anal->iob.io->addrbytes : 1;
 	RAnalBlock *bb = NULL;
 	RAnalBlock *bbg = NULL;
 	int ret = R_ANAL_RET_END, skip_ret = 0;
@@ -774,9 +775,12 @@ repeat:
 			if (anal->opt.jmptbl) {
 				if (is_delta_pointer_table (anal, op.addr, op.ptr)) {
 					char *str = r_str_newf ("pxt. 0x%08" PFMT64x" @ 0x%08"PFMT64x "\n", op.addr, op.ptr);
-					if (anal->cmdtail && !strstr (anal->cmdtail, str)) {
+					if (!anal->cmdtail) {
 						anal->cmdtail = r_str_appendf (anal->cmdtail, str);
 					}
+					if (anal->cmdtail && !strstr (anal->cmdtail, str)) {
+						anal->cmdtail = r_str_appendf (anal->cmdtail, str);
+					} 
 					free (str);
 					// jmptbl_addr = op.ptr;
 					// jmptbl_size = -1;
@@ -1072,13 +1076,7 @@ repeat:
 			}
 			if (anal->cur) {
 				/* if UJMP is in .plt section just skip it */
-				RIOSection *s = NULL;
-				SdbList *secs = anal->iob.sections_vget (anal->iob.io, addr);
-				if (secs) {
-					s = (RIOSection *) ls_pop (secs);
-					secs->free = NULL;
-					ls_free (secs);
-				}
+				RBinSection *s = anal->binb.get_vsect_at (anal->binb.bin, addr);
 				if (s && s->name) {
 					bool in_plt = strstr (s->name, ".plt") != NULL;
 					if (!in_plt && strstr (s->name, "_stubs") != NULL) {
@@ -1250,7 +1248,7 @@ R_API int r_anal_fcn(RAnal *anal, RAnalFunction *fcn, ut64 addr, ut8 *buf, ut64 
 	fcn->maxstack = 0;
 	ret = fcn_recurse (anal, fcn, addr, buf, len, FCN_DEPTH);
 	// update tinyrange for the function
-	update_tinyrange_bbs (fcn);
+	r_anal_fcn_update_tinyrange_bbs (fcn);
 
 	if (ret == R_ANAL_RET_END && r_anal_fcn_size (fcn)) {   // cfg analysis completed
 		RListIter *iter;
@@ -1501,7 +1499,7 @@ R_API int r_anal_fcn_add_bb(RAnal *anal, RAnalFunction *fcn, ut64 addr, ut64 siz
 		if (bbi) {
 			/* shrink overlapped basic block */
 			bbi->size = addr - (bbi->addr);
-			update_tinyrange_bbs (fcn);
+			r_anal_fcn_update_tinyrange_bbs (fcn);
 		}
 	}
 	if (!bb) {
@@ -1529,7 +1527,7 @@ R_API int r_anal_fcn_add_bb(RAnal *anal, RAnalFunction *fcn, ut64 addr, ut64 siz
 			}
 		}
 	}
-	update_tinyrange_bbs (fcn);
+	r_anal_fcn_update_tinyrange_bbs (fcn);
 	return true;
 }
 

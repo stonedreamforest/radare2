@@ -864,7 +864,6 @@ R_API int r_bin_object_set_items(RBinFile *binfile, RBinObject *o) {
 // XXX - this is a rather hacky way to do things, there may need to be a better
 // way.
 R_API int r_bin_load(RBin *bin, const char *file, ut64 baseaddr, ut64 loadaddr, int xtr_idx, int fd, int rawstr) {
-	int ret;
 	if (!bin) {
 		return false;
 	}
@@ -1027,7 +1026,8 @@ R_API int r_bin_load_io_at_offset_as_sz(RBin *bin, int fd, ut64 baseaddr,
 		loadaddr = 0;
 	}
 	file_sz = iob->fd_size (io, fd);
-	if (!file_sz || file_sz == UT64_MAX) {
+	// file_sz = UT64_MAX happens when attaching to frida:// and other non-debugger io plugins which results in double opening
+	if (!file_sz || (is_debugger && file_sz == UT64_MAX)) {
 		tfd = iob->fd_open (io, fname, R_IO_READ, 0644);
 		if (tfd >= 1) {
 			file_sz = iob->fd_size (io, tfd);
@@ -1056,13 +1056,6 @@ R_API int r_bin_load_io_at_offset_as_sz(RBin *bin, int fd, ut64 baseaddr,
 			return false;
 		}
 		ut64 seekaddr = is_debugger? baseaddr: loadaddr;
-#if 0
-		io->va = 0;
-		if (!iob->read_at (io, seekaddr, buf_bytes, sz)) {
-			sz = 0;
-		}
-		io->va = 1;
-#endif
 		if (!iob->fd_read_at (io, fd, seekaddr, buf_bytes, sz)) {
 			sz = 0LL;
 		}
@@ -1076,7 +1069,7 @@ R_API int r_bin_load_io_at_offset_as_sz(RBin *bin, int fd, ut64 baseaddr,
 			if (xtr && xtr->check_bytes (buf_bytes, sz)) {
 				if (xtr && (xtr->extract_from_bytes || xtr->extractall_from_bytes)) {
 					if (is_debugger && sz != file_sz) {
-						free (buf_bytes);
+						R_FREE (buf_bytes);
 						if (tfd < 0) {
 							tfd = iob->fd_open (io, fname, R_IO_READ, 0);
 						}
@@ -1084,13 +1077,13 @@ R_API int r_bin_load_io_at_offset_as_sz(RBin *bin, int fd, ut64 baseaddr,
 						if (sz != UT64_MAX) {
 							buf_bytes = calloc (1, sz + 1);
 							if (buf_bytes) {
-								iob->fd_read_at (io, tfd, 0, buf_bytes, sz);
+								(void) iob->fd_read_at (io, tfd, 0, buf_bytes, sz);
 							}
 						}
 						iob->fd_close (io, tfd);
 						tfd = -1;	// marking it closed
 					} else if (sz != file_sz) {
-						iob->read_at (io, 0LL, buf_bytes, sz);
+						(void) iob->read_at (io, 0LL, buf_bytes, sz);
 					}
 					binfile = r_bin_file_xtr_load_bytes (bin, xtr,
 						fname, buf_bytes, sz, file_sz,
@@ -1219,11 +1212,11 @@ static RBinFile *r_bin_file_xtr_load_bytes(RBin *bin, RBinXtrPlugin *xtr,
 					    ut64 file_sz, ut64 baseaddr,
 					    ut64 loadaddr, int idx, int fd,
 					    int rawstr) {
-	RBinFile *bf = bin? r_bin_file_find_by_name (bin, filename): NULL;
+	if (!bin || !bytes) {
+		return NULL;
+	}
+	RBinFile *bf = r_bin_file_find_by_name (bin, filename);
 	if (!bf) {
-		if (!bin) {
-			return NULL;
-		}
 		bf = r_bin_file_create_append (bin, filename, bytes, sz,
 					       file_sz, rawstr, fd, xtr->name, false);
 		if (!bf) {
@@ -1511,6 +1504,9 @@ static RBinFile *r_bin_file_new_from_bytes(RBin *bin, const char *file,
 	RBinXtrPlugin *xtr = NULL;
 	RBinObject *o = NULL;
 	RBinFile *bf = NULL;
+	if (sz == UT64_MAX) {
+		return NULL;
+	}
 
 	if (xtrname) {
 		xtr = r_bin_get_xtrplugin_by_name (bin, xtrname);
@@ -2404,11 +2400,17 @@ R_API void r_bin_set_user_ptr(RBin *bin, void *user) {
 	bin->user = user;
 }
 
+static RBinSection* _get_vsection_at(RBin *bin, ut64 vaddr) {
+	RBinObject *cur = r_bin_object_get_cur (bin);
+	return r_bin_get_section_at (cur, vaddr, true);
+}
 R_API void r_bin_bind(RBin *bin, RBinBind *b) {
 	if (b) {
 		b->bin = bin;
 		b->get_offset = getoffset;
 		b->get_name = getname;
+		b->get_sections = r_bin_get_sections;
+		b->get_vsect_at = _get_vsection_at;
 	}
 }
 

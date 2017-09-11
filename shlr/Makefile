@@ -23,9 +23,9 @@ CS_PATCHES=0
 else
 CS_TAR=
 CS_URL=$(GIT_PREFIX)github.com/aquynh/capstone.git
-CS_UPD=20170724
+CS_UPD=20170902
 CS_BRA=next
-CS_TIP=cbf274c94c9234904f4a12b9a01d4bb2cb21dbc6
+CS_TIP=596d31659c9e5b3f887c086c7a9a9bd27e048cc1
 # REVERT THIS COMMIT BECAUSE ITS WRONG
 CS_REV=
 CS_PATCHES=1
@@ -132,7 +132,7 @@ endif
 	cp -f sdb/src/.sdb${BUILD_EXT_EXE} $@
 
 .PHONY: sdb-sync sync-sdb sdbclean
-F=README.md config.mk src Makefile Jamroot meson.build
+F=README.md config.mk src Makefile Jamroot meson.build msvc
 SYNCFILES=$(addprefix sdb.vc/,${F})
 I=../libr/include
 

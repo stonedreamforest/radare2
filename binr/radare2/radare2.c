@@ -22,6 +22,7 @@ static char *rabin_cmd = NULL;
 static bool threaded = false;
 static bool haveRarunProfile = false;
 static struct r_core_t r;
+static int do_analysis = 0;
 
 static bool is_valid_gdb_file(RCoreFile *fh) {
 	RIODesc *d = fh && fh->core ? r_io_desc_get (fh->core->io, fh->fd) : NULL;
@@ -326,6 +327,9 @@ static bool run_commands(RList *cmds, RList *files, bool quiet) {
 		r_cons_flush ();
 	}
 	if (quiet) {
+		if (do_analysis) {
+			return true;
+		}
 		if (cmds && !r_list_empty (cmds)) {
 			return true;
 		}
@@ -401,7 +405,6 @@ int main(int argc, char **argv, char **envp) {
 	const char *prj = NULL;
 	int debug = 0;
 	int zflag = 0;
-	int do_analysis = 0;
 	int do_connect = 0;
 	bool fullfile = false;
 	int has_project;
@@ -503,17 +506,20 @@ int main(int argc, char **argv, char **envp) {
 		case 'a':
 			asmarch = optarg;
 			break;
-		case 'z': zflag++; break;
+		case 'z':
+			zflag++;
+			break;
 		case 'A':
-			if (!do_analysis) do_analysis ++;
-			do_analysis++;
+			do_analysis += do_analysis ? 1: 2;
 			break;
 		case 'b': asmbits = optarg; break;
 		case 'B':
 			baddr = r_num_math (r.num, optarg);
 			va = 2;
 			break;
-		case 'c': r_list_append (cmds, optarg); break;
+		case 'c':
+			r_list_append (cmds, optarg);
+			break;
 		case 'C':
 			do_connect = true;
 			break;
@@ -827,12 +833,13 @@ int main(int argc, char **argv, char **envp) {
 						optind--; // take filename
 					}
 					fh = r_core_file_open (&r, pfile, perms, mapaddr);
-					iod = r.io ? r_io_desc_get (r.io, fh->fd) : NULL;
+					iod = (r.io && fh) ? r_io_desc_get (r.io, fh->fd) : NULL;
 					if (!strcmp (debugbackend, "gdb")) {
-						const char *filepath;
-						ut64 addr;
-						filepath  = r_config_get (r.config, "dbg.exe.path");
-						addr = r_config_get_i (r.config, "bin.baddr");
+						const char *filepath = r_config_get (r.config, "dbg.exe.path");
+						ut64 addr = baddr;
+						if (addr == UINT64_MAX) {
+							addr = r_config_get_i (r.config, "bin.baddr");
+						}
 						if (filepath && r_file_exists (filepath)
 						    && !r_file_is_directory (filepath)) {
 							char *newpath = r_file_abspath (filepath);
@@ -841,7 +848,7 @@ int main(int argc, char **argv, char **envp) {
 									free (iod->name);
 									iod->name = newpath;
 								}
-								if (!addr || addr == UINT64_MAX) {
+								if (addr == UINT64_MAX) {
 									addr = r_debug_get_baddr (r.dbg, newpath);
 								}
 								r_core_bin_load (&r, NULL, addr);
@@ -850,7 +857,7 @@ int main(int argc, char **argv, char **envp) {
 							filepath = iod->name;
 							if (r_file_exists (filepath)
 							    && !r_file_is_directory (filepath)) {
-								if (!addr || addr == UINT64_MAX) {
+								if (addr == UINT64_MAX) {
 									addr = r_debug_get_baddr (r.dbg, filepath);
 								}
 								r_core_bin_load (&r, filepath, addr);
@@ -860,7 +867,7 @@ int main(int argc, char **argv, char **envp) {
 									free (iod->name);
 									iod->name = (char*) filepath;
 								}
-								if (!addr || addr == UINT64_MAX) {
+								if (addr == UINT64_MAX) {
 									addr = r_debug_get_baddr (r.dbg, filepath);
 								}
 								r_core_bin_load (&r, NULL, addr);
@@ -965,7 +972,7 @@ int main(int argc, char **argv, char **envp) {
 								(void)r_core_bin_load (&r, filepath, baddr);
 							}
 						} else {
-							r_io_map_new (r.io, iod->fd, perms, 0LL, 0LL, r_io_desc_size (iod));
+							r_io_map_new (r.io, iod->fd, perms, 0LL, mapaddr, r_io_desc_size (iod), true);
 							// r_io_map_new (r.io, iod->fd, iod->flags, 0LL, 0LL, r_io_desc_size (iod));
 							if (run_anal < 0) {
 								// PoC -- must move -rk functionalitiy into rcore
@@ -986,6 +993,15 @@ int main(int argc, char **argv, char **envp) {
 						run_anal = -1;
 					} else {
 						eprintf ("Cannot find project file\n");
+					}
+				} else {
+					// necessary for GDB, otherwise io only works with io.va=false
+					fh = r_core_file_open (&r, pfile, perms, mapaddr);
+					if (fh) {
+						iod = r.io ? r_io_desc_get (r.io, fh->fd) : NULL;
+						if (iod) {
+							r_io_map_new (r.io, iod->fd, perms, 0LL, 0LL, r_io_desc_size (iod), true);
+						}
 					}
 				}
 			}
@@ -1078,13 +1094,7 @@ int main(int argc, char **argv, char **envp) {
 		debug = r.file && iod && (r.file->fd == iod->fd) && iod->plugin && \
 			iod->plugin->isdbg;
 		if (debug) {
-			if (baddr != UT64_MAX) {
-				//setup without attach again because there is dpa call
-				//producing two attach and it's annoying
-				r_core_setup_debugger (&r, debugbackend, false);
-			} else {
-				r_core_setup_debugger (&r, debugbackend, true);
-			}
+			r_core_setup_debugger (&r, debugbackend, baddr == UT64_MAX);
 		}
 		if (!debug && r_flag_get (r.flags, "entry0")) {
 			r_core_cmd0 (&r, "s entry0");
@@ -1108,6 +1118,7 @@ int main(int argc, char **argv, char **envp) {
 			char *path = strdup (r_config_get (r.config, "file.path"));
 			char *sha1 = strdup (r_config_get (r.config, "file.sha1"));
 			has_project = r_core_project_open (&r, r_config_get (r.config, "prj.name"), threaded);
+			iod = r.io ? r_io_desc_get (r.io, fh->fd) : NULL;
 			if (has_project) {
 				r_config_set (r.config, "bin.strings", "false");
 			}
@@ -1224,6 +1235,14 @@ int main(int argc, char **argv, char **envp) {
 
 		// no flagspace selected by default the beginning
 		r.flags->space_idx = -1;
+		if (!debug && r.bin && r.bin->cur && r.bin->cur->o && r.bin->cur->o->info) {
+			if (r.bin->cur->o->info->arch) {
+				r_core_cmd0 (&r, "aeip");
+			}
+		}
+		if (perms & R_IO_WRITE) {
+			r_core_cmd0 (&r, "omfg+w");
+		}
 		for (;;) {
 #if USE_THREADS
 			do {

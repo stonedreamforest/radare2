@@ -12,8 +12,14 @@
 #include <r_lib.h>
 #if __UNIX__
 #include <sys/mman.h>
+#include <limits.h>
 #endif
-#if __APPLE__
+#if __APPLE__ && __MAC_10_5
+#define HAVE_COPYFILE_H 1
+#else
+#define HAVE_COPYFILE_H 0
+#endif
+#if HAVE_COPYFILE_H
 #include <copyfile.h>
 #endif
 #if _MSC_VER
@@ -197,10 +203,11 @@ R_API char *r_file_abspath(const char *file) {
 		ret = strdup (file);
 	}
 #if __UNIX__
-	char *abspath = realpath (ret, NULL);
+	char resolved_path[PATH_MAX] = {0};
+	char *abspath = realpath (ret, &resolved_path);
 	if (abspath) {
 		free (ret);
-		ret = abspath;
+		ret = strdup (abspath);
 	}
 #endif
 	return ret;
@@ -545,13 +552,21 @@ R_API bool r_file_hexdump(const char *file, const ut8 *buf, int len, int append)
 		eprintf ("Cannot open '%s' for writing\n", file);
 		return false;
 	}
-	for (i = 0; i< len; i+= 16) {
+	for (i = 0; i < len; i += 16) {
+		int l = R_MIN (16, len - i);
 		fprintf (fd, "0x%08"PFMT64x"  ", (ut64)i);
-		for (j = 0; j<16; j+=2) {
+		for (j = 0; j + 2 <= l; j += 2) {
 			fprintf (fd, "%02x%02x ", buf[i +j], buf[i+j+1]);
 		}
+		if (j < l) {
+			fprintf (fd, "%02x   ", buf[i + j]);
+			j += 2;
+		}
+		if (j < 16) {
+			fprintf (fd, "%*s ", (16 - j) / 2 * 5, "");
+		}
 		for (j = 0; j < 16; j++) {
-			fprintf (fd, "%c", IS_PRINTABLE (buf[i + j])? buf[i+j]: '.');
+			fprintf (fd, "%c", j < l && IS_PRINTABLE (buf[i + j])? buf[i+j]: '.');
 		}
 		fprintf (fd, "\n");
 	}
@@ -917,7 +932,7 @@ R_API char *r_file_tmpdir() {
 R_API bool r_file_copy (const char *src, const char *dst) {
 	/* TODO: implement in C */
 	/* TODO: Use NO_CACHE for iOS dyldcache copying */
-#if __APPLE__
+#if HAVE_COPYFILE_H
 	return copyfile (src, dst, 0, 0) != -1;
 #elif __WINDOWS__
 	return r_sys_cmdf ("copy %s %s", src, dst);

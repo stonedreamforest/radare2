@@ -126,6 +126,7 @@ R_API RIO* r_io_init(RIO* io) {
 	if (!io) {
 		return NULL;
 	}
+	io->addrbytes = 1;
 	r_io_desc_init (io);
 	r_io_map_init (io);
 	r_io_section_init (io);
@@ -193,7 +194,7 @@ R_API RIODesc* r_io_open(RIO* io, const char* uri, int flags, int mode) {
 	if (!desc) {
 		return NULL;
 	}
-	r_io_map_new (io, desc->fd, desc->flags, 0LL, 0LL, r_io_desc_size (desc));
+	r_io_map_new (io, desc->fd, desc->flags, 0LL, 0LL, r_io_desc_size (desc), true);
 	return desc;
 }
 
@@ -212,11 +213,11 @@ R_API RIODesc* r_io_open_at(RIO* io, const char* uri, int flags, int mode, ut64 
 	// second map
 	if (size && ((UT64_MAX - size + 1) < at)) {
 		// split map into 2 maps if only 1 big map results into interger overflow
-		r_io_map_new (io, desc->fd, desc->flags, UT64_MAX - at + 1, 0LL, size - (UT64_MAX - at) - 1);
+		r_io_map_new (io, desc->fd, desc->flags, UT64_MAX - at + 1, 0LL, size - (UT64_MAX - at) - 1, true);
 		// someone pls take a look at this confusing stuff
 		size = UT64_MAX - at + 1;
 	}
-	r_io_map_new (io, desc->fd, desc->flags, 0LL, at, size); // first map
+	r_io_map_new (io, desc->fd, desc->flags, 0LL, at, size, true); // first map
 	return desc;
 }
 
@@ -381,6 +382,40 @@ R_API bool r_io_read_at(RIO* io, ut64 addr, ut8* buf, int len) {
 	return ret;
 }
 
+R_API RIOAccessLog *r_io_al_read_at(RIO* io, ut64 addr, ut8* buf, int len) {
+	RIOAccessLog *log;
+	RIOAccessLogElement *ale = NULL;
+	int rlen;
+	if (!io || !buf || (len < 1)) {
+		return NULL;
+	}
+	if (io->va) {
+		return r_io_al_vread_at (io, addr, buf, len);
+	}
+	if (!(log = r_io_accesslog_new ())) {
+		return NULL;
+	}
+	log->buf = buf;
+	if (io->ff) {
+		memset (buf, 0xff, len);
+	}
+	rlen = r_io_pread_at (io, addr, buf, len);
+	if (io->cached_read) {
+		(void)r_io_cache_read (io, addr, buf, len);
+	}
+	if (!(ale = R_NEW0 (RIOAccessLogElement))) {
+		log->allocation_failed = true;
+	} else {
+		ale->paddr = ale->vaddr = addr;
+		ale->len = rlen;
+		ale->expect_len = len;
+		ale->flags = io->desc ? io->desc->flags : 0;
+		ale->fd = io->desc ? io->desc->fd : 0;		//xxx
+		r_list_append (log->log, ale);
+	}
+	return log;
+}
+
 R_API bool r_io_write_at(RIO* io, ut64 addr, const ut8* buf, int len) {
 	int i;
 	bool ret = false;
@@ -450,12 +485,8 @@ R_API int r_io_system(RIO* io, const char* cmd) {
 }
 
 R_API bool r_io_resize(RIO* io, ut64 newsize) {
-	if (io && io->desc && io->desc->plugin && io->desc->plugin->resize) {
-		bool ret = io->desc->plugin->resize (io, io->desc, newsize);
-		if (io->p_cache) {
-			r_io_desc_cache_cleanup (io->desc);
-		}
-		return ret;
+	if (io) {
+		return r_io_desc_resize (io->desc, newsize);
 	}
 	return false;
 }
@@ -474,7 +505,7 @@ R_API int r_io_extend_at(RIO* io, ut64 addr, ut64 size) {
 		int ret;
 		ut64 cur_off = io->off;
 		r_io_seek (io, addr, R_IO_SEEK_SET);
-		ret = io->desc->plugin->extend (io, io->desc, size);
+		ret = r_io_desc_extend (io->desc, size);
 		//no need to seek here
 		io->off = cur_off;
 		return ret;
@@ -539,6 +570,7 @@ R_API int r_io_bind(RIO* io, RIOBind* bnd) {
 	bnd->open_at = r_io_open_at;
 	bnd->close = r_io_fd_close;
 	bnd->read_at = r_io_read_at;
+	bnd->al_read_at = r_io_al_read_at;
 	bnd->write_at = r_io_write_at;
 	bnd->system = r_io_system;
 	bnd->fd_open = r_io_fd_open;
@@ -551,6 +583,9 @@ R_API int r_io_bind(RIO* io, RIOBind* bnd) {
 	bnd->fd_write_at = r_io_fd_write_at;
 	bnd->fd_is_dbg = r_io_fd_is_dbg;
 	bnd->fd_get_name = r_io_fd_get_name;
+	bnd->al_sort = r_io_accesslog_sort;
+	bnd->al_free = r_io_accesslog_free;
+	bnd->al_buf_byflags = r_io_accesslog_getf_buf_byflags;
 	bnd->is_valid_offset = r_io_is_valid_offset;
 	bnd->sections_vget = r_io_sections_vget;
 	bnd->section_add = r_io_section_add;
@@ -616,9 +651,7 @@ R_API ut64 r_io_seek(RIO* io, ut64 offset, int whence) {
 		break;
 	case R_IO_SEEK_END:
 	default:
-		if (io && io->desc && io->desc->plugin && io->desc->plugin->lseek) {
-			return io->off = io->desc->plugin->lseek (io, io->desc, offset, whence);
-		}
+		io->off = r_io_desc_seek (io->desc, offset, whence);
 		break;
 	}
 	return io->off;

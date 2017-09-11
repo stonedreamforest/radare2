@@ -800,6 +800,7 @@ R_API char *r_str_trim_head_tail(char *str) {
 // Secure string copy with null terminator (like strlcpy or strscpy but ours
 R_API void r_str_ncpy(char *dst, const char *src, int n) {
 	int i;
+	n--;
 	for (i = 0; src[i] && n > 0; i++, n--) {
 		dst[i] = src[i];
 	}
@@ -911,6 +912,7 @@ R_API void r_str_writef(int fd, const char *fmt, ...) {
 	va_end (ap);
 }
 
+// TODO: rename to prepend
 R_API char *r_str_prefix(char *ptr, const char *string) {
 	int slen, plen;
 	if (!ptr) {
@@ -1180,6 +1182,19 @@ R_API int r_str_unescape(char *buf) {
 			}
 			buf[i] = (ch << 4) + ch2;
 			memmove (buf + i + 1, buf + i + 4, strlen (buf + i + 4) + 1);
+		} else if (IS_OCTAL (buf[i + 1])) {
+			int num_digits = 1;
+			buf[i] = buf[i + 1] - '0';
+			if (IS_OCTAL (buf[i + 2])) {
+				num_digits++;
+				buf[i] = (ut8)buf[i] * 8 + (buf[i + 2] - '0');
+				if (IS_OCTAL (buf[i + 3])) {
+					num_digits++;
+					buf[i] = (ut8)buf[i] * 8 + (buf[i + 3] - '0');
+				}
+			}
+			memmove (buf + i + 1, buf + i + 1 + num_digits,
+			         strlen (buf + i + 1 + num_digits) + 1);
 		} else {
 			eprintf ("'\\x' expected.\n");
 			return 0; // -1?
@@ -2426,36 +2441,39 @@ R_API int r_print_format_length (const char *fmt) {
 }
 
 R_API char *r_str_prefix_all (char *s, const char *pfx) {
-	char *o, *p, *os = s;
+	char *p, *os = s;
 	int newlines = 1;
 	int len = 0;
-	int plen = 0;
+	int pfx_len = 0;
 
-	if (s) {
-		if (!pfx) {
-			return strdup (s);
-		}
-		len = strlen (s);
-		plen = strlen (pfx);
-		for (p = s; *p; p++)  {
-			if (*p == '\n') {
-				newlines++;
-			}
-		}
-		o = malloc (len + (plen * newlines) + 1);
-		memcpy (o, pfx, plen);
-		for (p=o + plen; *s; s++) {
-			*p++ = *s;
-			if (*s == '\n' && s[1]) {
-				memcpy (p, pfx, plen);
-				p += plen;
-			}
-		}
-		*p = 0;
-		free (os);
-		return o;
+	if (!s) {
+		return strdup (pfx);
 	}
-	return NULL;
+	if (!pfx) {
+		return strdup (s);
+	}
+	len = strlen (s);
+	pfx_len = strlen (pfx);
+	for (p = s; *p; p++)  {
+		if (*p == '\n') {
+			newlines++;
+		}
+	}
+	char *o = malloc (len + (pfx_len * newlines) + 1);
+	if (!o) {
+		return os;
+	}
+	memcpy (o, pfx, pfx_len);
+	for (p = o + pfx_len; *s; s++) {
+		*p++ = *s;
+		if (*s == '\n' && s[1]) {
+			memcpy (p, pfx, pfx_len);
+			p += pfx_len;
+		}
+	}
+	*p = 0;
+	free (os);
+	return o;
 }
 
 #define HASCH(x) strchr (input_value,x)

@@ -531,7 +531,10 @@ R_API int r_debug_detach(RDebug *dbg, int pid) {
 	return false;
 }
 
-R_API int r_debug_select(RDebug *dbg, int pid, int tid) {
+R_API bool r_debug_select(RDebug *dbg, int pid, int tid) {
+	if (pid < 0) {
+		return false;
+	}
 	if (tid < 0) {
 		tid = pid;
 	}
@@ -540,8 +543,12 @@ R_API int r_debug_select(RDebug *dbg, int pid, int tid) {
 			eprintf ("= attach %d %d\n", pid, tid);
 		}
 	} else {
-		if (dbg->pid != -1)
+		if (dbg->pid != -1) {
 			eprintf ("Child %d is dead\n", dbg->pid);
+		}
+	}
+	if (pid < 0 || tid < 0) {
+		return false;
 	}
 
 	if (dbg->h && dbg->h->select && !dbg->h->select (pid, tid))
@@ -1044,16 +1051,24 @@ repeat:
 				}
 			}
 		}
-
-		if (reason == R_DEBUG_REASON_BREAKPOINT && bp && !bp->enabled) {
+		if (reason == R_DEBUG_REASON_BREAKPOINT &&
+		   ((bp && !bp->enabled) || (!bp && !r_cons_is_breaked () && dbg->corebind.core &&
+			   		    dbg->corebind.cfggeti (dbg->corebind.core, "dbg.bpsysign")))) {
 			goto repeat;
 		}
 
 #if __linux__
 		if (reason == R_DEBUG_REASON_NEW_PID && dbg->follow_child) {
 #if DEBUGGER
-			void linux_attach_new_process (RDebug *dbg);
-			linux_attach_new_process (dbg);
+			/// if the plugin is not compiled link fails, so better do runtime linking
+			/// until this code gets fixed
+			static void (*linux_attach_new_process) (RDebug *dbg) = NULL;
+			if (!linux_attach_new_process) {
+				linux_attach_new_process = r_lib_dl_sym (NULL, "linux_attach_new_process");
+			}
+			if (linux_attach_new_process) {
+				linux_attach_new_process (dbg);
+			}
 #endif
 			goto repeat;
 		}
@@ -1505,18 +1520,6 @@ R_API int r_debug_drx_unset(RDebug *dbg, int idx) {
 	return false;
 }
 
-#if __WINDOWS__
-#pragma message ("KILL ME PLS")
-static const char winbase_str[64];
-
-static void __winbase_cb_printf(const char *f, ...) {
-	va_list ap;
-	va_start (ap, f);
-	vsnprintf (winbase_str, 63, f, ap);
-	va_end (ap);
-}
-#endif
-
 R_API ut64 r_debug_get_baddr(RDebug *dbg, const char *file) {
 	char *abspath;
 	RListIter *iter;
@@ -1534,12 +1537,8 @@ R_API ut64 r_debug_get_baddr(RDebug *dbg, const char *file) {
 		return 0LL;
 	}
 #if __WINDOWS__
-#pragma message ("KILL ME PLS")
-	void *foo = dbg->iob.io->cb_printf;
-	dbg->iob.io->cb_printf = __winbase_cb_printf;
-	dbg->iob.system (dbg->iob.io, "winbase");
-	dbg->iob.io->cb_printf = foo;
-	return r_num_get (NULL, winbase_str);
+	ut64 base;
+	return r_io_desc_get_base (dbg->iob.io->desc, &base), base;
 #else
 	r_debug_select (dbg, pid, tid);
 	r_debug_map_sync (dbg);

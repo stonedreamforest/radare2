@@ -509,11 +509,15 @@ typedef struct r_bin_write_t {
 
 typedef int (*RBinGetOffset)(RBin *bin, int type, int idx);
 typedef const char *(*RBinGetName)(RBin *bin, int type, int idx);
+typedef RList *(*RBinGetSections)(RBin *bin);
+typedef RBinSection *(*RBinGetSectionAt)(RBin *bin, ut64 addr);
 
 typedef struct r_bin_bind_t {
 	RBin *bin;
 	RBinGetOffset get_offset;
 	RBinGetName get_name;
+	RBinGetSections get_sections;
+	RBinGetSectionAt get_vsect_at;
 	ut32 visibility;
 } RBinBind;
 
@@ -647,7 +651,7 @@ R_API ut64 r_bin_wr_scn_resize(RBin *bin, const char *name, ut64 size);
 R_API bool r_bin_wr_scn_perms(RBin *bin, const char *name, int perms);
 R_API bool r_bin_wr_rpath_del(RBin *bin);
 R_API bool r_bin_wr_entry(RBin *bin, ut64 addr);
-R_API int r_bin_wr_output(RBin *bin, const char *filename);
+R_API bool r_bin_wr_output(RBin *bin, const char *filename);
 R_API int r_bin_dwarf_parse_info(RBinDwarfDebugAbbrev *da, RBin *a, int mode);
 R_API RList *r_bin_dwarf_parse_line(RBin *a, int mode);
 R_API RList *r_bin_dwarf_parse_aranges(RBin *a, int mode);

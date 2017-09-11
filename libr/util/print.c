@@ -16,6 +16,42 @@ static void libc_printf(const char *format, ...) {
 }
 static bool isInterrupted = false;
 
+R_API void r_print_portionbar(RPrint *p, const ut64 *portions, int n_portions) {
+	const int use_color = p->flags & R_PRINT_FLAGS_COLOR;
+	int i, j;
+	ut64 total = 0LL;
+	for (i = 0; i < n_portions; i++) {
+		ut64 sum = total + portions[i];
+		if (total > sum) {
+			eprintf ("portionbar overflow aborted\n");
+			return;
+		}
+		total = sum;
+	}
+	p->cb_printf ("[");
+	if (total == 0) {
+		total = 1;
+	}
+	for (i = 0; i < n_portions; i++) {
+		int pc = portions[i] * 100 / total;
+		// adjust pc to screen columns
+		pc = pc * p->width / 100;
+		if (use_color) {
+			p->cb_printf ("\x1b[%dm", 31 + (i % 8));
+		}
+		if (pc == 0) {
+			pc = 1;
+		}
+		for (j = 0; j < pc; j++) {
+			p->cb_printf ("%c", 'A'+ i);
+		}
+		if (use_color) {
+			p->cb_printf (Color_RESET);
+		}
+	}
+	p->cb_printf ("]\n");
+}
+
 R_API void r_print_columns (RPrint *p, const ut8 *buf, int len, int height) {
 	int i, j, cols = 78;
 	int rows = height > 0 ? height : 10;
@@ -370,6 +406,13 @@ R_API void r_print_addr(RPrint *p, ut64 addr) {
 		if (use_color) {
 			const char *pre = PREOFF (offset): Color_GREEN;
 			const char *fin = Color_RESET;
+			if (p->flags & R_PRINT_FLAGS_RAINBOW) {
+				// pre = r_cons_rgb_str_off (rgbstr, addr);
+				if (p && p->cons && p->cons->rgbstr) {
+					char rgbstr[32];
+					pre = p->cons->rgbstr (rgbstr, addr);
+				}
+			}
 			if (dec) {
 				printfmt ("%s%s%" PFMT64d "%s%c", pre, white, addr, fin, ch);
 			} else {
@@ -864,7 +907,9 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 							printfmt (j % 2? "   ": "  ");
 						}
 					} else {
-						if (base == 10) {
+						if (base == 32) {
+							printfmt ((j%4)? "   ": "  ");
+						} else if (base == 10) {
 							printfmt (j % 2? "     ": "  ");
 						} else {
 							printfmt (j % 2? "   ": "  ");

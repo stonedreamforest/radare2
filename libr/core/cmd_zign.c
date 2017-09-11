@@ -15,6 +15,7 @@ static const char *help_msg_z[] = {
 	"z-", "zignature", "delete zignature",
 	"z-", "*", "delete all zignatures",
 	"za", "[?]", "add zignature",
+	"zg", "", "generate zignatures (alias for zaF)",
 	"zo", "[?]", "manage zignature files",
 	"zf", "[?]", "manage FLIRT signatures",
 	"z/", "[?]", "search zignatures",
@@ -83,7 +84,7 @@ static bool addFcnBytes(RCore *core, RAnalFunction *fcn, const char *name) {
 	}
 	int maxsz = r_config_get_i (core->config, "zign.maxsz");
 	int fcnlen = r_anal_fcn_realsize (fcn);
-	int len = R_MIN (core->assembler->addrbytes * fcnlen, maxsz);
+	int len = R_MIN (core->io->addrbytes * fcnlen, maxsz);
 
 	ut8 *buf = malloc (len);
 	if (!buf) {
@@ -91,10 +92,11 @@ static bool addFcnBytes(RCore *core, RAnalFunction *fcn, const char *name) {
 	}
 
 	bool retval = false;
-	if (r_io_read_at (core->io, fcn->addr, buf, len) != len) {
+	if (!r_io_is_valid_offset (core->io, fcn->addr, 0)) {
 		eprintf ("error: cannot read at 0x%08"PFMT64x"\n", fcn->addr);
 		goto out;
 	}
+	(void)r_io_read_at (core->io, fcn->addr, buf, len);
 	retval = r_sign_add_anal (core->anal, name, len, buf, fcn->addr);
 
 out:
@@ -626,10 +628,11 @@ static bool searchRange(RCore *core, ut64 from, ut64 to, bool rad, struct ctxSea
 			break;
 		}
 		rlen = R_MIN (core->blocksize, to - at);
-		if (!r_io_read_at (core->io, at, buf, rlen)) {
+		if (!r_io_is_valid_offset (core->io, at, 0)) {
 			retval = false;
 			break;
 		}
+		(void)r_io_read_at (core->io, at, buf, rlen);
 		if (r_sign_search_update (core->anal, ss, &at, buf, rlen) == -1) {
 			eprintf ("search: update read error at 0x%08"PFMT64x"\n", at);
 			retval = false;
@@ -842,6 +845,8 @@ static int cmd_zign(void *data, const char *input) {
 		break;
 	case 'o':
 		return cmdOpen (data, input + 1);
+	case 'g':
+		return cmdAdd (data, "F");
 	case 'a':
 		return cmdAdd (data, input + 1);
 	case 'f':

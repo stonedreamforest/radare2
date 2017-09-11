@@ -237,9 +237,11 @@ static int cb_analnoncode(void *user, void *data) {
 static void update_analarch_options(RCore *core, RConfigNode *node) {
 	RAnalPlugin *h;
 	RListIter *it;
-	r_list_purge (node->options);
-	r_list_foreach (core->anal->plugins, it, h) {
-		SETOPTIONS (node, h->name, NULL);
+	if (core && core->anal && node) {
+		r_list_purge (node->options);
+		r_list_foreach (core->anal->plugins, it, h) {
+			SETOPTIONS (node, h->name, NULL);
+		}
 	}
 }
 
@@ -288,6 +290,18 @@ static int cb_asmminvalsub(void *user, void *data) {
 	RCore *core = (RCore *) user;
 	RConfigNode *node = (RConfigNode *) data;
 	core->parser->minval = node->i_value;
+	return true;
+}
+
+static int cb_scrrainbow(void *user, void *data) {
+	RCore *core = (RCore *) user;
+	RConfigNode *node = (RConfigNode *) data;
+	if (node->i_value) {
+		core->print->flags |= R_PRINT_FLAGS_RAINBOW;
+	} else {
+		core->print->flags &= (~R_PRINT_FLAGS_RAINBOW);
+	}
+	r_print_set_flags (core->print, core->print->flags);
 	return true;
 }
 
@@ -350,9 +364,11 @@ static int cb_asmcpu(void *user, void *data) {
 static void update_asmarch_options(RCore *core, RConfigNode *node) {
 	RAsmPlugin *h;
 	RListIter *iter;
-	r_list_purge (node->options);
-	r_list_foreach (core->assembler->plugins, iter, h) {
-		SETOPTIONS (node, h->name, NULL);
+	if (core && node && core->assembler) {
+		r_list_purge (node->options);
+		r_list_foreach (core->assembler->plugins, iter, h) {
+			SETOPTIONS (node, h->name, NULL);
+		}
 	}
 }
 
@@ -369,11 +385,16 @@ static int cb_asmarch(void *user, void *data) {
 	if (core && core->anal && core->anal->bits) {
 		bits = core->anal->bits;
 	}
-	if (*node->value == '?') {
-		update_asmarch_options (core, node);
-		/* print more verbose help instead of plain option values */
-		rasm2_list (core, NULL, node->value[1]);
-		return false;
+	if (node->value[0] == '?') {
+		if (strlen (node->value) > 1 && node->value[1] == '?') {
+			update_asmarch_options (core, node);
+			/* print more verbose help instead of plain option values */
+			rasm2_list (core, NULL, node->value[1]);
+			return false;
+		} else {
+			print_node_options (node);
+			return false;
+		}
 	}
 	r_egg_setup (core->egg, node->value, bits, 0, R_SYS_OS);
 
@@ -643,17 +664,6 @@ static int cb_asm_armimm(void *user, void *data) {
 	RCore *core = (RCore *) user;
 	RConfigNode *node = (RConfigNode *) data;
 	core->assembler->immdisp = node->i_value ? true : false;
-	return true;
-}
-
-static int cb_asm_addrbytes(void *user, void *data) {
-	RCore *core = (RCore *) user;
-	RConfigNode *node = (RConfigNode *) data;
-	if (node->i_value < 1) {
-		eprintf ("asm.arch: asm.addrbytes should >= 1\n");
-		return false;
-	}
-	core->anal->addrbytes = core->assembler->addrbytes = node->i_value;
 	return true;
 }
 
@@ -1802,12 +1812,32 @@ static int cb_binminstr(void *user, void *data) {
 }
 
 static int cb_searchin(void *user, void *data) {
- 	RConfigNode *node = (RConfigNode*) data;
- 	if (*node->value == '?') {
-		print_node_options (node);
- 		return false;
- 	}
- 	return true;
+	RConfigNode *node = (RConfigNode*) data;
+	if (node->value[0] == '?') {
+		if (strlen (node->value) > 1 && node->value[1] == '?') {
+			r_cons_printf ("Valid values for search.in (depends on .from/.to and io.va):\n"
+			"raw               search in raw io (ignoring bounds)\n"
+			"block             search in the current block\n"
+			"io.map            search in current map\n"
+			"io.maps           search in all maps\n"
+			"io.section        search in current mapped section\n"
+			"io.sections       search in all mapped sections\n"
+			"io.sections.write search in all writable marked sections\n"
+			"io.sections.exec  search in all executable marked sections\n"
+			"dbg.stack         search in the stack\n"
+			"dbg.heap          search in the heap\n"
+			"dbg.map           search in current memory map\n"
+			"dbg.maps          search in all memory maps\n"
+			"dbg.maps.exec     search in all executable marked memory maps\n"
+			"dbg.maps.write    search in all writable marked memory maps\n"
+			"anal.fcn          search in the current function\n"
+			"anal.bb           search in the current basic-block\n");
+		} else {
+			print_node_options (node);
+		}
+		return false;
+	} 
+	return true;
 }
 
 static int cb_fileloadmethod(void *user, void *data) {
@@ -2089,7 +2119,6 @@ R_API int r_core_config_init(RCore *core) {
 
 	/* asm */
 	//asm.os needs to be first, since other asm.* depend on it
-	SETICB ("asm.addrbytes", 1,  &cb_asm_addrbytes, "Number of bytes one vaddr unit uses");
 	SETICB ("asm.armimm", false,  &cb_asm_armimm, "Display # for immediates in ARM");
 	n = NODECB ("asm.os", R_SYS_OS, &cb_asmos);
 	SETDESC (n, "Select operating system (kernel)");
@@ -2143,6 +2172,7 @@ R_API int r_core_config_init(RCore *core) {
 	SETPREF ("asm.middle", "false", "Allow disassembling jumps in the middle of an instruction");
 	SETPREF ("asm.noisy", "true", "Show comments considered noisy but possibly useful");
 	SETPREF ("asm.offset", "true", "Show offsets at disassembly");
+	SETCB ("scr.rainbow", "false", &cb_scrrainbow, "Shows rainbow colors depending of address");
 	SETPREF ("asm.reloff", "false", "Show relative offsets instead of absolute address in disasm");
 	SETPREF ("asm.reloff.flags", "false", "Show relative offsets to flags (not only functions)");
 	SETPREF ("asm.section", "false", "Show section name before offset");
@@ -2358,6 +2388,7 @@ R_API int r_core_config_init(RCore *core) {
 #else
 	SETICB ("dbg.bpsize", 1, &cb_dbgbpsize, "Size of software breakpoints");
 #endif
+	SETPREF ("dbg.bpsysign", "false", "Ignore system breakpoints");
 	SETICB ("dbg.btdepth", 128, &cb_dbgbtdepth, "Depth of backtrace");
 	SETCB ("dbg.trace", "false", &cb_trace, "Trace program execution (see asm.trace)");
 	SETICB ("dbg.trace.tag", 0, &cb_tracetag, "Trace tag");
@@ -2585,7 +2616,7 @@ R_API int r_core_config_init(RCore *core) {
 	SETPREF ("search.overlap", "false", "Look for overlapped search hits");
 	SETI ("search.maxhits", 0, "Maximum number of hits (0: no limit)");
 	SETI ("search.from", -1, "Search start address");
-	n = NODECB ("search.in", "file", &cb_searchin);
+	n = NODECB ("search.in", "io.maps", &cb_searchin);
 	SETDESC (n, "Specify search boundaries");
 	SETOPTIONS (n, "raw", "block", "file", "io.maps", "io.maprange", "io.section", NULL);
 	SETOPTIONS (n, "io.sections", "io.sections.write", "io.sections.exec",

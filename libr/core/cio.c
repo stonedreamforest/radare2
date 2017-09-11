@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2009-2016 - pancake */
+/* radare2 - LGPL - Copyright 2009-2017 - pancake */
 
 #include "r_core.h"
 
@@ -18,7 +18,7 @@ R_API int r_core_setup_debugger (RCore *r, const char *debugbackend, bool attach
 	r_config_set (r->config, "io.ff", "true");
 	r_core_cmdf (r, "dL %s", debugbackend);
 	if (!is_gdb) {
-		pid = *p; // 1st element in debugger's struct must be int
+		pid = r_io_desc_get_pid (fd);
 		r_core_cmdf (r, "dp=%d", pid);
 		if (attach) {
 			r_core_cmdf (r, "dpa %d", pid);
@@ -60,7 +60,7 @@ R_API int r_core_seek_base (RCore *core, const char *hex) {
 	return r_core_seek (core, addr, 1);
 }
 
-R_API int r_core_dump(RCore *core, const char *file, ut64 addr, ut64 size, int append) {
+R_API bool r_core_dump(RCore *core, const char *file, ut64 addr, ut64 size, int append) {
 	ut64 i;
 	ut8 *buf;
 	int bs = core->blocksize;
@@ -98,7 +98,6 @@ R_API int r_core_dump(RCore *core, const char *file, ut64 addr, ut64 size, int a
 			break;
 		}
 	}
-	eprintf ("dumped 0x%"PFMT64x" bytes\n", i);
 	r_cons_break_pop ();
 	fclose (fd);
 	free (buf);
@@ -275,15 +274,11 @@ R_API void r_core_seek_archbits(RCore *core, ut64 addr) {
 }
 
 R_API bool r_core_seek(RCore *core, ut64 addr, bool rb) {
-	ut64 newoff = r_io_seek (core->io, addr, R_IO_SEEK_SET);
-	if (newoff == UT64_MAX) {
-		return false;
-	}
-	core->offset = newoff;
+	core->offset = r_io_seek (core->io, addr, R_IO_SEEK_SET);
 	if (rb) {
 		r_core_block_read (core);
 	}
-	return (newoff != addr);
+	return core->offset == addr;
 }
 
 R_API int r_core_seek_delta(RCore *core, st64 addr) {
@@ -369,12 +364,12 @@ R_API int r_core_shift_block(RCore *core, ut64 addr, ut64 b_size, st64 dist) {
 		b_size = fend > bstart ? fend - bstart: 0;
 	}
 
-	if (b_size < 1) {
+	if ((st64)b_size < 1) {
 		return false;
 	}
 	shift_buf = calloc (b_size, 1);
 	if (!shift_buf) {
-		eprintf ("Cannot allocated %d bytes\n", b_size);
+		eprintf ("Cannot allocated %d bytes\n", (int)b_size);
 		return false;
 	}
 

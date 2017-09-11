@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2011-2015 - pancake */
+/* radare - LGPL - Copyright 2011-2017 - pancake */
 
 #include <r_egg.h>
 #include <r_bin.h>
@@ -23,7 +23,7 @@ static int usage (int v) {
 	" -d [off:dword]  patch dword (4 bytes) at given offset\n"
 	" -D [off:qword]  patch qword (8 bytes) at given offset\n"
 	" -e [encoder]    use specific encoder. see -L\n"
-	" -f [format]     output format (raw, pe, elf, mach0)\n"
+	" -f [format]     output format (raw, c, pe, elf, mach0)\n"
 	" -F              output native format (osx=mach0, linux=elf, ..)\n"
 	" -h              show this help\n"
 	" -i [shellcode]  include shellcode plugin, uses options. see -L\n"
@@ -243,8 +243,8 @@ int main(int argc, char **argv) {
 			{
 			char *p = strchr (optarg, '=');
 			if (p) {
-				*p = 0;
-				r_egg_option_set (egg, optarg, p + 1);
+				*p++ = 0;
+				r_egg_option_set (egg, optarg, p);
 			} else {
 				r_egg_option_set (egg, optarg, "true");
 			}
@@ -468,7 +468,18 @@ int main(int argc, char **argv) {
 				eprintf ("No format specified wtf\n");
 				goto fail;
 			}
-			switch (*format) { //*format) {
+			switch (*format) {
+			case 'c':
+				printf ("const int payload_length = %d;\n", (int)b->length);
+				printf ("const unsigned char *payload = {");
+				for (i = 0; i < b->length; i++) {
+					if (!(i % 20)) {
+						printf ("\n  ");
+					}
+					printf ("%s0x%02x", i?", ": "", b->buf[i]);
+				}
+				printf ("\n};\n");
+				break;
 			case 'r':
 				if (show_str) {
 					printf ("\"");
