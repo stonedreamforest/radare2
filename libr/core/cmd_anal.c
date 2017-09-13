@@ -235,6 +235,7 @@ static const char *help_msg_afb[] = {
 	"afb.", " [addr]", "show info of current basic block",
 	"afb+", " fcn_at bbat bbsz [jump] [fail] ([type] ([diff]))", "add basic block by hand",
 	"afbr", "", "Show addresses of instructions which leave the function",
+	"afbi", "", "print current basic block information",
 	"afbj", "", "show basic blocks information in json",
 	"afbe", " bbfrom bbto", "add basic-block edge for switch-cases",
 	"afB", " [bits]", "define asm.bits for the given function",
@@ -1504,6 +1505,37 @@ static int anal_fcn_list_bb(RCore *core, const char *input, bool one) {
 				b->addr, b->size, inputs, outputs, b->ninstr, r_str_bool (b->traced));
 			}
 			break;
+		case 'i':
+			{
+			RListIter *iter2;
+			RAnalBlock *b2;
+			int inputs = 0;
+			int outputs = 0;
+			r_list_foreach (fcn->bbs, iter2, b2) {
+				if (b2->jump == b->addr) {
+					inputs++;
+				}
+				if (b2->fail == b->addr) {
+					inputs++;
+				}
+			}
+			if (b->jump != UT64_MAX) {
+				outputs ++;
+			}
+			if (b->fail != UT64_MAX) {
+				outputs ++;
+			}
+			firstItem = false;
+			if (b->jump != UT64_MAX) {
+				r_cons_printf ("jump: 0x%08"PFMT64x"\n", b->jump);
+			}
+			if (b->fail != UT64_MAX) {
+				r_cons_printf ("fail: 0x%08"PFMT64x"\n", b->fail);
+			}
+			r_cons_printf ("addr: 0x%08"PFMT64x"\nsize: %d\ninputs: %d\noutputs: %d\nninstr: %d\ntraced: %s\n",
+				b->addr, b->size, inputs, outputs, b->ninstr, r_str_bool (b->traced));
+			}
+			break;
 		default:
 			tp = r_debug_trace_get (core->dbg, b->addr);
 			r_cons_printf ("0x%08" PFMT64x " 0x%08" PFMT64x " %02X:%04X %d",
@@ -2209,6 +2241,9 @@ static int cmd_anal_fcn(RCore *core, const char *input) {
 		case 'j': // "afbj"
 			anal_fcn_list_bb (core, input + 2, false);
 			break;
+		case 'i': // "afbi"
+			anal_fcn_list_bb (core, input + 2, true);
+			break;
 		case '.': // "afb."
 			anal_fcn_list_bb (core, input[2]? " $$": input + 2, true);
 			break;
@@ -2496,9 +2531,9 @@ static int cmd_anal_fcn(RCore *core, const char *input) {
 	return true;
 }
 
-static void __anal_reg_list(RCore *core, int type, int size, char mode) {
+// size: 0: bits; -1: any; >0: exact size
+static void __anal_reg_list(RCore *core, int type, int bits, char mode) {
 	RReg *hack = core->dbg->reg;
-	int bits = (size > 0)? size: core->anal->bits;
 	const char *use_color;
 	int use_colors = r_config_get_i (core->config, "scr.color");
 	if (use_colors) {
@@ -2507,6 +2542,12 @@ static void __anal_reg_list(RCore *core, int type, int size, char mode) {
 		use_color = ConsP (creg) : Color_BWHITE;
 	} else {
 		use_color = NULL;
+	}
+	if (bits < 0) {
+		// TODO Change the `size` argument of r_debug_reg_list to use -1 for any and 0 for anal->bits
+		bits = 0;
+	} else if (!bits) {
+		bits = core->anal->bits;
 	}
 	if (core->anal) {
 		core->dbg->reg = core->anal->reg;
@@ -2577,7 +2618,7 @@ void cmd_anal_reg(RCore *core, const char *str) {
 			r_cons_println (core->anal->reg->reg_profile_cmt);
 		}
 		break;
-	case 'w':
+	case 'w': // "arw"
 		switch (str[1]) {
 		case '?': {
 			r_core_cmd_help (core, help_msg_arw);
@@ -2593,16 +2634,16 @@ void cmd_anal_reg(RCore *core, const char *str) {
 		break;
 	case 'a': // "ara"
 		switch (str[1]) {
-		case '?':
+		case '?': // "ara?"
 			r_core_cmd_help (core, help_msg_ara);
 			break;
-		case 's':
+		case 's': // "aras"
 			r_reg_arena_swap (core->anal->reg, false);
 			break;
-		case '+':
+		case '+': // "ara+"
 			r_reg_arena_push (core->anal->reg);
 			break;
-		case '-':
+		case '-': // "ara-"
 			r_reg_arena_pop (core->anal->reg);
 			break;
 		default: {
@@ -2622,7 +2663,7 @@ void cmd_anal_reg(RCore *core, const char *str) {
 		} break;
 		}
 		break;
-	case '?':
+	case '?': // "ar?"
 		if (str[1]) {
 			ut64 off = r_reg_getv (core->anal->reg, str + 1);
 			r_cons_printf ("0x%08" PFMT64x "\n", off);
@@ -2630,10 +2671,10 @@ void cmd_anal_reg(RCore *core, const char *str) {
 			r_core_cmd_help (core, help_msg_ar);
 		}
 		break;
-	case 'r':
+	case 'r': // "arr"
 		r_core_debug_rr (core, core->anal->reg);
 		break;
-	case 'S': {
+	case 'S': { // "arS"
 		int sz;
 		ut8 *buf = r_reg_get_bytes (
 			core->anal->reg, R_REG_TYPE_GPR, &sz);
@@ -2660,7 +2701,7 @@ void cmd_anal_reg(RCore *core, const char *str) {
 			free (buf);
 		}
 		} break;
-	case 'c':
+	case 'c': // "arc"
 		// TODO: set flag values with drc zf=1
 		{
 			RRegItem *r;
@@ -2707,17 +2748,17 @@ void cmd_anal_reg(RCore *core, const char *str) {
 			}
 		}
 		break;
-	case 's': // "drs"
+	case 's': // "ars"
 		switch (str[1]) {
-		case '-':
+		case '-': // "ars-"
 			r_reg_arena_pop (core->dbg->reg);
 			// restore debug registers if in debugger mode
 			r_debug_reg_sync (core->dbg, R_REG_TYPE_GPR, true);
 			break;
-		case '+': // "drs+"
+		case '+': // "ars+"
 			r_reg_arena_push (core->dbg->reg);
 			break;
-		case '?': {
+		case '?': { // "ars?"
 			// TODO #7967 help refactor: dup from drp
 			const char *help_msg[] = {
 				"Usage:", "drs", " # Register states commands",
@@ -2733,35 +2774,35 @@ void cmd_anal_reg(RCore *core, const char *str) {
 			break;
 		}
 		break;
-	case 'p': // arp
+	case 'p': // "arp"
 		// XXX we have to break out .h for these cmd_xxx files.
 		cmd_reg_profile (core, 'a', str);
 		break;
-	case 't': // "drt"
+	case 't': // "art"
 		for (i = 0; (name = r_reg_get_type (i)); i++)
 			r_cons_println (name);
 		break;
-	case 'n': // "drn" // "arn"
+	case 'n': // "arn"
 		if (*(str + 1) == '\0') {
-			eprintf ("Oops. try drn [PC|SP|BP|A0|A1|A2|A3|A4|R0|R1|ZF|SF|NF|OF]\n");
+			eprintf ("Oops. try arn [PC|SP|BP|A0|A1|A2|A3|A4|R0|R1|ZF|SF|NF|OF]\n");
 			break;
 		}
 		name = r_reg_get_name (core->dbg->reg, r_reg_get_name_idx (str + 2));
 		if (name && *name) {
 			r_cons_println (name);
 		} else {
-			eprintf ("Oops. try drn [PC|SP|BP|A0|A1|A2|A3|A4|R0|R1|ZF|SF|NF|OF]\n");
+			eprintf ("Oops. try arn [PC|SP|BP|A0|A1|A2|A3|A4|R0|R1|ZF|SF|NF|OF]\n");
 		}
 		break;
-	case 'd':								// "drd"
+	case 'd': // "ard"
 		r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, bits, 3, use_color); // XXX detect which one is current usage
 		break;
-	case 'o': // "dro"
+	case 'o': // "aro"
 		r_reg_arena_swap (core->dbg->reg, false);
 		r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, bits, 0, use_color); // XXX detect which one is current usage
 		r_reg_arena_swap (core->dbg->reg, false);
 		break;
-	case '=': // "dr=" // "aer="
+	case '=': // "ar="
 		{
 			if (str[1]) {
 				st64 sz = r_num_math (core->num, str + 1);
@@ -2772,14 +2813,14 @@ void cmd_anal_reg(RCore *core, const char *str) {
 			__anal_reg_list (core, type, size, 2);
 		}
 		break;
-	case '-':
-	case '*':
-	case 'R':
-	case 'j':
-	case '\0':
+	case '-': // "ar-"
+	case '*': // "ar*"
+	case 'R': // "arR"
+	case 'j': // "arj"
+	case '\0': // "ar"
 		__anal_reg_list (core, type, size, str[0]);
 		break;
-	case ' ':
+	case ' ': { // "ar "
 		arg = strchr (str + 1, '=');
 		if (arg) {
 			char *ostr, *regname;
@@ -2809,29 +2850,28 @@ void cmd_anal_reg(RCore *core, const char *str) {
 			free (ostr);
 			return;
 		}
-		size = atoi (str + 1);
-		if (size == 0) {
-			char *comma = strchr (str + 1, ',');
-			if (comma) {
-				size = 32; // non-zero
-				char *args = strdup (str + 1);
-				char argc = r_str_split (args, ',');
-				for (i = 0; i < argc; i++) {
-					showreg (core, r_str_word_get0 (args, i)); //
+		char name[32];
+		int i = 1, j;
+		while (str[i]) {
+			if (str[i] == ',') {
+				i++;
+			} else {
+				for (j = i; str[++j] && str[j] != ','; );
+				if (j - i + 1 <= sizeof name) {
+					r_str_ncpy (name, str + i, j - i + 1);
+					if (IS_DIGIT (name[0])) { // e.g. ar 32
+						__anal_reg_list (core, R_REG_TYPE_GPR, atoi (name), '\0');
+					} else if (showreg (core, name) > 0) { // e.g. ar rax
+					} else { // e.g. ar gpr ; ar all
+						type = r_reg_type_by_name (name);
+						// TODO differentiate ALL and illegal register types and print error message for the latter
+						__anal_reg_list (core, type, -1, '\0');
+					}
 				}
-				free (args);
-			} else {
-				size = showreg (core, str + 1);
-			}
-		} else {
-			char *arg = strchr (str + 1, ' ');
-			type = arg? r_reg_type_by_name (arg + 1): R_REG_TYPE_GPR;
-			if (type != R_REG_TYPE_LAST) {
-				__anal_reg_list (core, type, size, str[0]);
-			} else {
-				eprintf ("cmd_debug_reg: Unknown type\n");
+				i = j;
 			}
 		}
+	}
 	}
 }
 
@@ -4356,19 +4396,26 @@ static void cmd_anal_calls(RCore *core, const char *input, bool only_print_flag)
 			m->to = addr + len;
 			r_list_append (ranges, m);
 		} else {
-			ranges = r_core_get_boundaries_prot (core, R_IO_EXEC, "io.sections", NULL, NULL);
+			ranges = r_core_get_boundaries_prot (core, R_IO_EXEC, "io.sections");
 		}
 		addr_end = addr + len;
 	}
 	r_cons_break_push (NULL, NULL);
 	if (!binfile || !r_list_length (ranges)) {
+		RListIter *iter;
+		RIOMap *map;
 		r_list_free (ranges);
 		const char *search_in = r_config_get (core->config, "search.in");
-		ranges = r_core_get_boundaries_prot (core, 0, search_in, &addr, &addr_end);
-		if (only_print_flag) {
-			r_cons_printf ("f fcn. 0x%08"PFMT64x" 0 0x%08"PFMT64x"\n", addr, addr);
-		} else {
-			_anal_calls (core, addr, addr_end);
+		ranges = r_core_get_boundaries_prot (core, 0, search_in);
+		r_list_foreach (ranges, iter, map) {
+			ut64 addr = map->from;
+			ut64 addr_end = map->to;
+			if (only_print_flag) {
+				r_cons_printf ("f fcn.0x%08"PFMT64x" %d 0x%08"PFMT64x"\n",
+					addr, addr_end - addr, addr);
+			} else {
+				_anal_calls (core, addr, addr_end);
+			}
 		}
 	} else {
 		RListIter *iter;
@@ -4379,7 +4426,8 @@ static void cmd_anal_calls(RCore *core, const char *input, bool only_print_flag)
 				//this normally will happen on fuzzed binaries, dunno if with huge
 				//binaries as well
 				if (only_print_flag) {
-					r_cons_printf ("f fcn.0x%08"PFMT64x" 0 0x%08"PFMT64x"\n", addr, addr);
+					r_cons_printf ("f fcn.0x%08"PFMT64x" %d 0x%08"PFMT64x"\n",
+						addr, (int)addr_end - addr, addr);
 				} else {
 					_anal_calls (core, addr, addr_end);
 				}
@@ -5588,52 +5636,69 @@ static void cmd_anal_aav(RCore *core, const char *input) {
 #define geti(x) r_config_get_i(core->config, x);
 	RIOSection *s = NULL;
 	ut64 o_align = geti ("search.align");
-	ut64 from, to, ptr = 0;
-	ut64 vmin, vmax;
+	ut64 ptr = 0;
 	bool asterisk = strchr (input, '*');;
 	bool is_debug = r_config_get_i (core->config, "cfg.debug");
 
-	if (is_debug) {
-		r_list_free (r_core_get_boundaries_prot (core, 0, "dbg.map", &from, &to));
-	} else {
-		s = r_io_section_vget (core->io, core->offset);
-		if (s) {
-			from = s->vaddr;
-			to = s->vaddr + s->size;
-		} else {
-			eprintf ("aav: Cannot find section at this address\n");
-			// TODO: look in debug maps
-			return;
-		}
-	}
+	// pre
 	seti ("search.align", 4);
 	char *arg = strchr (input, ' ');
 	if (arg) {
 		ptr = r_num_math (core->num, arg + 1);
 		s = r_io_section_vget (core->io, ptr);
 	}
-	{
+	if (false) {
 		RList *ret;
 		if (is_debug) {
-			ret = r_core_get_boundaries_prot (core, 0, "dbg.map", &vmin, &vmax);
+			ret = r_core_get_boundaries_prot (core, 0, "dbg.map");
 		} else {
-			from = r_config_get_i (core->config, "bin.baddr");
-			to = from + ((core->file)? r_io_fd_size (core->io, core->file->fd): 0);
+			// ut64 from = r_config_get_i (core->config, "bin.baddr");
+			//ut64 to = from + ((core->file)? r_io_fd_size (core->io, core->file->fd): 0);
 			if (!s) {
 				eprintf ("aav: Cannot find section at 0x%"PFMT64d"\n", ptr);
 				return; // WTF!
 			}
-			ret = r_core_get_boundaries_prot (core, 0, "io.sections", &vmin, &vmax);
+			ret = r_core_get_boundaries_prot (core, 0, "io.sections");
+		}
+		RIOMap *map = r_list_first (ret);
+		if (map) {
+		//	from = map->from;
+		//	to = map->to;
 		}
 		r_list_free (ret);
 	}
-	eprintf ("aav: using from to 0x%"PFMT64x" 0x%"PFMT64x"\n", from, to);
-	eprintf ("Using vmin 0x%"PFMT64x" and vmax 0x%"PFMT64x"\n", vmin, vmax);
 	int vsize = 4; // 32bit dword
 	if (core->assembler->bits == 64) {
 		vsize = 8;
 	}
-	(void)r_core_search_value_in_range (core, from, to, vmin, vmax, vsize, asterisk, _CbInRangeAav);
+
+	// body
+	if (is_debug) {
+		RList *list = r_core_get_boundaries_prot (core, 0, "dbg.map");
+		RListIter *iter;
+		RIOMap *map;
+		r_list_foreach (list, iter, map) {
+			eprintf ("aav: from 0x%"PFMT64x" to 0x%"PFMT64x"\n", map->from, map->to);
+			(void)r_core_search_value_in_range (core, map->from, map->to,
+				map->from, map->to, vsize, asterisk, _CbInRangeAav);
+		}
+		r_list_free (list);
+	} else {
+		s = r_io_section_vget (core->io, core->offset);
+		if (s) {
+			ut64 from = s->vaddr;
+			ut64 to = s->vaddr + s->size;
+			eprintf ("aav: from 0x%"PFMT64x" to 0x%"PFMT64x"\n", from, to);
+			(void)r_core_search_value_in_range (core, from, to,
+				from, to, vsize, asterisk, _CbInRangeAav);
+		} else {
+			eprintf ("aav: Cannot find section at this address\n");
+			// TODO: look in debug maps
+		}
+	}
+
+	// end
+
 	seti ("search.align", o_align);
 }
 

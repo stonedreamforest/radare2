@@ -895,6 +895,26 @@ static int cb_cfgsanbox(void *user, void *data) {
 	return (!node->i_value && ret)? 0: 1;
 }
 
+static int cb_cfg_fortunes(void *user, void *data) {
+	RCore *core = (RCore *)user;
+	RConfigNode *node = (RConfigNode *)data;
+	// TODO CN_BOOL option does not receive the right hand side of assignment as an argument
+	if (node->value[0] == '?') {
+		r_core_fortune_list (core);
+		return false;
+	}
+	return true;
+}
+
+static int cb_cfg_fortunes_type(void *user, void *data) {
+	RConfigNode *node = (RConfigNode *)data;
+	if (node->value[0] == '?') {
+		r_core_fortune_list_types ();
+		return false;
+	}
+	return true;
+}
+
 static int cb_cmdlog(void *user, void *data) {
 	RCore *core = (RCore *) user;
 	RConfigNode *node = (RConfigNode *) data;
@@ -1836,17 +1856,8 @@ static int cb_searchin(void *user, void *data) {
 			print_node_options (node);
 		}
 		return false;
-	} 
+	}
 	return true;
-}
-
-static int cb_fileloadmethod(void *user, void *data) {
- 	RConfigNode *node = (RConfigNode*) data;
- 	if (*node->value == '?') {
-		print_node_options (node);
- 		return false;
- 	}
- 	return true;
 }
 
 static int __dbg_swstep_getter(void *user, RConfigNode *node) {
@@ -2083,7 +2094,6 @@ R_API int r_core_config_init(RCore *core) {
 	SETPREF ("anal.prelude", "", "Specify an hexpair to find preludes in code");
 	SETCB ("anal.split", "true", &cb_analsplit, "Split functions into basic blocks in analysis");
 	SETCB ("anal.recont", "false", &cb_analrecont, "End block after splitting a basic block instead of error"); // testing
-	SETCB ("anal.trace", "false", &cb_anal_trace, "Record ESIL trace in log database");
 	SETI ("anal.ptrdepth", 3, "Maximum number of nested pointers to follow in analysis");
 	SETICB ("anal.maxreflines", 0, &cb_analmaxrefs, "Maximum number of reflines to be analyzed and displayed in asm.lines with pd");
 
@@ -2290,8 +2300,8 @@ R_API int r_core_config_init(RCore *core) {
 	free (p);
 	r_config_desc (cfg, "cfg.editor", "Select default editor program");
 	SETPREF ("cfg.user", r_sys_whoami (buf), "Set current username/pid");
-	SETPREF ("cfg.fortunes", "true", "If enabled show tips at start");
-	SETPREF ("cfg.fortunes.type", "tips,fun", "Type of fortunes to show (tips, fun, nsfw, creepy)");
+	SETCB ("cfg.fortunes", "true", &cb_cfg_fortunes, "If enabled show tips at start");
+	SETCB ("cfg.fortunes.type", "tips,fun", &cb_cfg_fortunes_type, "Type of fortunes to show (tips, fun, nsfw, creepy)");
 	SETPREF ("cfg.fortunes.clippy", "false", "Use ?E instead of ?e");
 	SETPREF ("cfg.fortunes.tts", "false", "Speak out the fortune");
 	SETI ("cfg.hashlimit", SLURP_LIMIT, "If the file is bigger than hashlimit, do not compute hashes");
@@ -2659,9 +2669,6 @@ R_API int r_core_config_init(RCore *core) {
 	SETPREF ("file.lastpath", "", "Path of current file");
 	SETPREF ("file.sha1", "", "SHA1 hash of current file");
 	SETPREF ("file.type", "", "Type of current file");
-	n = NODECB ("file.loadmethod", "fail", &cb_fileloadmethod);
-	SETDESC (n, "What to do when load addresses overlap");
-	SETOPTIONS (n, "fail", "overwrite", "append", NULL);
 	SETI ("file.loadalign", 1024, "Alignment of load addresses");
 	SETI ("file.openmany", 1, "Maximum number of files opened at once");
 	SETPREF ("file.nowarn", "true", "Suppress file loading warning messages");

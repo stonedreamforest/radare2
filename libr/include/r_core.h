@@ -313,6 +313,11 @@ R_API ut32 r_core_file_cur_fd (RCore *core);
 
 R_API void r_core_debug_rr (RCore *core, RReg *reg);
 
+/* fortune */
+R_API void r_core_fortune_list_types(void);
+R_API void r_core_fortune_list(RCore *core);
+R_API void r_core_fortune_print_random(RCore *core);
+
 /* project */
 R_API bool r_core_project_load(RCore *core, const char *prjfile, const char *rcfile);
 R_API RThread *r_core_project_load_bg(RCore *core, const char *prjfile, const char *rcfile);
@@ -413,7 +418,6 @@ R_API RList *r_core_asm_bwdisassemble (RCore *core, ut64 addr, int n, int len);
 R_API RList *r_core_asm_back_disassemble_instr (RCore *core, ut64 addr, int len, ut32 hit_count, ut32 extra_padding);
 R_API RList *r_core_asm_back_disassemble_byte (RCore *core, ut64 addr, int len, ut32 hit_count, ut32 extra_padding);
 R_API ut32 r_core_asm_bwdis_len (RCore* core, int* len, ut64* start_addr, ut32 l);
-R_API void r_core_print_fortune(RCore *core);
 R_API int r_core_print_disasm(RPrint *p, RCore *core, ut64 addr, ut8 *buf, int len, int lines, int invbreak, int nbytes);
 R_API int r_core_print_disasm_json(RCore *core, ut64 addr, ut8 *buf, int len, int lines);
 R_API int r_core_print_disasm_instructions (RCore *core, int len, int l);
@@ -540,8 +544,8 @@ R_API int r_core_visual_prompt (RCore *core);
 R_API bool r_core_visual_esil (RCore *core);
 R_API int r_core_search_preludes(RCore *core);
 R_API int r_core_search_prelude(RCore *core, ut64 from, ut64 to, const ut8 *buf, int blen, const ut8 *mask, int mlen);
-R_API RList* /*<RIOMap*>*/ r_core_get_boundaries_prot (RCore *core, int protection, const char *mode, ut64 *from, ut64 *to);
-R_API RList* /*<RIOMap*>*/ r_core_get_boundaries (RCore *core, const char *mode, ut64 *from, ut64 *to);
+R_API RList* /*<RIOMap*>*/ r_core_get_boundaries_prot (RCore *core, int protection, const char *mode);
+R_API RList* /*<RIOMap*>*/ r_core_get_boundaries (RCore *core, const char *mode);
 R_API RList* r_core_get_boundaries_ok(RCore *core);
 
 R_API int r_core_patch (RCore *core, const char *patch);

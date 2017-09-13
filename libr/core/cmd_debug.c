@@ -389,7 +389,7 @@ static const char *help_msg_dt[] = {
 	"dta", " 0x804020 ...", "Only trace given addresses",
 	"dtc[?][addr]|([from] [to] [addr])", "", "Trace call/ret",
 	"dtd", "", "List all traced disassembled",
-	"dte", "[?]", "Show esil trace logs (anal.trace)",
+	"dte", "[?]", "Show esil trace logs",
 	"dtg", "", "Graph call/ret trace",
 	"dtg*", "", "Graph in agn/age commands. use .dtg*;aggi for visual",
 	"dtgi", "", "Interactive debug trace",
@@ -3235,8 +3235,10 @@ static void do_debug_trace_calls(RCore *core, ut64 from, ut64 to, ut64 final_add
 	int n = 0;
 
 	if (!trace_libs) {
-		RList *bounds = r_core_get_boundaries (core, "dbg.program", &from, &to);
+#if NOOP
+		RList *bounds = r_core_get_boundaries (core, "dbg.program");
 		r_list_free (bounds);
+#endif
 	}
 
 	/* set root if not already present */

@@ -291,14 +291,17 @@ static ut64 getref (RCore *core, int n, char t, int type) {
 	RListIter *iter;
 	RAnalRef *r;
 	RList *list;
-	int i=0;
-	if (!fcn) return UT64_MAX;
+	int i = 0;
+	if (!fcn) {
+		return UT64_MAX;
+	}
 #if FCN_OLD
 	list = (t=='r')? fcn->refs: fcn->xrefs;
 	r_list_foreach (list, iter, r) {
 		if (r->type == type) {
-			if (i == n)
+			if (i == n) {
 				return r->addr;
+			}
 			i++;
 		}
 	}
@@ -565,10 +568,10 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 			return 0LL; // maybe // return UT64_MAX;
 		case '?': return core->num->value;
 		case '$': return core->offset;
-		case 'o': 
+		case 'o':
 			{
 				RIOSection *s;
-				s = r_io_section_vget (core->io, core->offset); 
+				s = r_io_section_vget (core->io, core->offset);
 				return s ? core->offset - s->vaddr + s->paddr : core->offset;
 			}
 			break;
@@ -2552,7 +2555,7 @@ R_API int r_core_search_value_in_range(RCore *core, ut64 from, ut64 to, ut64 vmi
 			case 2: v16 = *((ut16 *) (v)); match = (v16 >= vmin && v16 <= vmax); value = v16; break;
 			case 4: v32 = *((ut32 *) (v)); match = (v32 >= vmin && v32 <= vmax); value = v32; break;
 			case 8: v64 = *((ut64 *) (v)); match = (v64 >= vmin && v64 <= vmax); value = v64; break;
-			default: eprintf ("Unknown vsize\n"); return -1;
+			default: eprintf ("Unknown vsize %d\n", vsize); return -1;
 			}
 			if (match && !vinfun) {
 				if (vinfunr) {

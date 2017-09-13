@@ -118,7 +118,7 @@ static const char *help_msg_p[] = {
 	"p", "[iI][df] [len]", "print N ops/bytes (f=func) (see pi? and pdi)",
 	"p", "[kK] [len]", "print key in randomart (K is for mosaic)",
 	"pm", "[?] [magic]", "print libmagic data (see pm? and /m?)",
-	"pq", "[z] [len]", "print QR code with the first Nbytes of the current block",
+	"pq", "[?][iz] [len]", "print QR code with the first Nbytes of the current block",
 	"pr", "[?][glx] [len]", "print N raw bytes (in lines or hexblocks, 'g'unzip)",
 	"ps", "[?][pwz] [len]", "print pascal/wide/zero-terminated strings",
 	"pt", "[?][dn] [len]", "print different timestamps",
@@ -2804,7 +2804,7 @@ static void _pointer_table(RCore *core, ut64 origin, ut64 offset, const ut8 *buf
 		step = 4;
 	}
 	if (!r_io_is_valid_offset (core->io, origin, 0) ||
-	    !r_io_is_valid_offset (core->io, offset, 0)) {	
+	    !r_io_is_valid_offset (core->io, offset, 0)) {
 		return;
 	}
 	if (origin != offset) {
@@ -3311,7 +3311,7 @@ static int cmd_print(void *data, const char *input) {
 		if (p) {
 			l = (int) r_num_math (core->num, p + 1);
 			/* except disasm and memoryfmt (pd, pm) */
-			if (input[0] != 'd' && input[0] != 'D' && input[0] != 'm' && 
+			if (input[0] != 'd' && input[0] != 'D' && input[0] != 'm' &&
 				input[0] != 'a' && input[0] != 'f' && input[0] != 'i' && input[0] != 'I') {
 				int n = (st32) l; // r_num_math (core->num, input+1);
 				if (l < 0) {
@@ -3415,7 +3415,15 @@ static int cmd_print(void *data, const char *input) {
 			r_cons_strcat ("{");
 		}
 		off = core->offset;
-		r_list_free (r_core_get_boundaries (core, "file", &from, &to));
+		{
+			RList *list = r_core_get_boundaries (core, "file");
+			RIOMap *map = r_list_first (list);
+			if (map) {
+				from = map->from;
+				to = map->to;
+			}
+			r_list_free (list);
+		}
 		piece = R_MAX ((to - from) / w, 1);
 		as = r_core_anal_get_stats (core, from, to, piece);
 		if (!as && mode != '?') {
@@ -4275,7 +4283,7 @@ static int cmd_print(void *data, const char *input) {
 				* as vaddr. */
 				if ((section = r_bin_get_section_at (obj, core->offset, true))) {
 					vaddr = core->offset + section->vaddr - section->paddr;
-				} 
+				}
 
 				r_cons_printf ("{\"string\":");
 				str = r_str_utf16_encode ((const char *) core->block, len);
@@ -5355,7 +5363,8 @@ static int cmd_print(void *data, const char *input) {
 				len = core->blocksize;
 			}
 		}
-		char *res = r_qrcode_gen (core->block, len, r_config_get_i (core->config, "scr.utf8"));
+		bool inverted = (input[1] == 'i'); // pqi -- inverted colors
+		char *res = r_qrcode_gen (core->block, len, r_config_get_i (core->config, "scr.utf8"), inverted);
 		if (res) {
 			r_cons_printf ("%s\n", res);
 			free (res);

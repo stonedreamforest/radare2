@@ -1000,6 +1000,7 @@ int main(int argc, char **argv, char **envp) {
 					if (fh) {
 						iod = r.io ? r_io_desc_get (r.io, fh->fd) : NULL;
 						if (iod) {
+							perms = iod->flags;
 							r_io_map_new (r.io, iod->fd, perms, 0LL, 0LL, r_io_desc_size (iod), true);
 						}
 					}
@@ -1202,7 +1203,7 @@ int main(int argc, char **argv, char **envp) {
 	}
 	if (r_config_get_i (r.config, "scr.prompt")) {
 		if (run_rc && r_config_get_i (r.config, "cfg.fortunes")) {
-			r_core_print_fortune (&r);
+			r_core_fortune_print_random (&r);
 			r_cons_flush ();
 		}
 	}
