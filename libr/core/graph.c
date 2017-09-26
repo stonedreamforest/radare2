@@ -1558,8 +1558,8 @@ static void set_layer_gap (RAGraph *g) {
 }
 
 static void fix_back_edge_dummy_nodes (RAGraph *g, RANode *from, RANode *to) {
-	RANode *v, *tmp;
-	RGraphNode *gv;
+	RANode *v, *tmp = NULL;
+	RGraphNode *gv = NULL;
 	RListIter *it;
 	int i;
 	const RList *neighbours = r_graph_get_neighbours (g->graph, to->gnode);
@@ -1574,7 +1574,6 @@ static void fix_back_edge_dummy_nodes (RAGraph *g, RANode *from, RANode *to) {
 		}
 		tmp = NULL;
 	}
-
 	if (tmp) {
 		tmp = v;
 		v = to;
@@ -1694,6 +1693,7 @@ void backedge_info (RAGraph *g) {
 
 				AEdge *e = R_NEW0 (AEdge);
 				if (!e) {
+					free (arr);
 					return;
 				}
 
@@ -1719,9 +1719,9 @@ void backedge_info (RAGraph *g) {
 		RANode *n = (RANode *)g->layers[0].nodes[0]->data;
 		AEdge *e = R_NEW0 (AEdge);
 		if (!e) {
+			free (arr);
 			return;
 		}
-
 		e->is_reversed = true;
 		e->from = NULL;
 		e->to = NULL;
@@ -1739,6 +1739,7 @@ void backedge_info (RAGraph *g) {
 		RANode *n = (RANode *)g->layers[g->n_layers - 1].nodes[0]->data;
 		AEdge *e = R_NEW0 (AEdge);
 		if (!e) {
+			free (arr);
 			return;
 		}
 
@@ -2723,8 +2724,8 @@ static void agraph_print_edges(RAGraph *g) {
 	struct tmpbackedgeinfo *temp;
 	r_list_foreach (bckedges, itm, temp) {
 		int leftlen, rightlen;
-		int minx, maxx;
-		struct tmplayer *tt;
+		int minx = 0, maxx = 0;
+		struct tmplayer *tt = NULL;
 		tl = r_list_get_n (lyr, temp->fromlayer);
 		tm = r_list_get_n (lyr, temp->tolayer);
 
@@ -2744,7 +2745,9 @@ static void agraph_print_edges(RAGraph *g) {
 			}
 		}
 
-		tt->revedgectr += 1;
+		if (tt) {
+			tt->revedgectr += 1;
+		}
 		if (g->layout == 0) {
 			leftlen = (temp->ax - minx) + (temp->bx - minx);
 			rightlen = (maxx - temp->ax) + (maxx - temp->bx);
@@ -2753,10 +2756,12 @@ static void agraph_print_edges(RAGraph *g) {
 			rightlen = (maxx - temp->ay) + (maxx - temp->by);
 		}
 
-		if (rightlen < leftlen) {
-			r_cons_canvas_line_back_edge (g->can, temp->ax, temp->ay, temp->bx, temp->by, &(temp->style), temp->edgectr, maxx + 1, tt->revedgectr, !g->layout);
-		} else {
-			r_cons_canvas_line_back_edge (g->can, temp->ax, temp->ay, temp->bx, temp->by, &(temp->style), temp->edgectr, minx - 1, tt->revedgectr, !g->layout);
+		if (tt) {
+			if (rightlen < leftlen) {
+				r_cons_canvas_line_back_edge (g->can, temp->ax, temp->ay, temp->bx, temp->by, &(temp->style), temp->edgectr, maxx + 1, tt->revedgectr, !g->layout);
+			} else {
+				r_cons_canvas_line_back_edge (g->can, temp->ax, temp->ay, temp->bx, temp->by, &(temp->style), temp->edgectr, minx - 1, tt->revedgectr, !g->layout);
+			}
 		}
 
 		r_list_foreach (lyr, ito, tl) {
@@ -3081,7 +3086,7 @@ static void agraph_init(RAGraph *g) {
 	g->color_box2 = Color_BLUE; // selected node
 	g->color_box3 = Color_MAGENTA;
 	g->graph = r_graph_new ();
-	g->nodes = sdb_new0 ();
+	g->nodes = sdb_new0 (); // XXX leak
 	g->zoom = ZOOM_DEFAULT;
 	g->movspeed = DEFAULT_SPEED; // r_config_get_i (g->core->config, "graph.scroll");
 	g->db = sdb_new0 ();
@@ -3090,6 +3095,7 @@ static void agraph_init(RAGraph *g) {
 static void free_anode(RANode *n) {
 	free (n->title);
 	free (n->body);
+	free (n);
 }
 
 static int free_anode_cb(void *user UNUSED, const char *k UNUSED, const char *v) {
@@ -3301,13 +3307,12 @@ R_API void r_agraph_reset(RAGraph *g) {
 	agraph_free_nodes (g);
 	r_agraph_set_title (g, NULL);
 	sdb_reset (g->db);
-	r_list_free (g->edges);
+	r_list_purge (g->edges);
 
 	g->nodes = sdb_new0 ();
 	g->update_seek_on = NULL;
 	g->x = g->y = g->w = g->h = 0;
 	agraph_sdb_init (g);
-	g->edges = r_list_new ();
 	g->curnode = NULL;
 }
 

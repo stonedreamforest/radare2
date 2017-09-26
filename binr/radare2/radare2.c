@@ -775,6 +775,28 @@ int main(int argc, char **argv, char **envp) {
 	if (run_rc) {
 		radare2_rc (&r);
 	}
+
+	if (r_config_get_i (r.config, "zign.autoload")) {
+		char *path = r_file_abspath (r_config_get (r.config, "dir.zigns"));
+		char *complete_path = NULL;
+		RList *list = r_sys_dir (path);
+		RListIter *iter;
+		char *file = NULL;
+		r_list_foreach (list, iter, file) {
+			if (file && *file && *file != '.') {
+				complete_path = r_str_newf ("%s"R_SYS_DIR"%s", path, file);
+				if (r_str_endswith (complete_path, "gz")) {
+					r_sign_load_gz (r.anal, complete_path);
+				} else {
+					r_sign_load (r.anal, complete_path);
+				}
+				r_str_free (complete_path);
+			}
+		}
+		r_list_free (list);
+		free (path);
+	}
+
 	// if (argv[optind] && r_file_is_directory (argv[optind]))
 	if (pfile && r_file_is_directory (pfile)) {
 		if (debug) {
@@ -996,12 +1018,15 @@ int main(int argc, char **argv, char **envp) {
 					}
 				} else {
 					// necessary for GDB, otherwise io only works with io.va=false
-					fh = r_core_file_open (&r, pfile, perms, mapaddr);
 					if (fh) {
-						iod = r.io ? r_io_desc_get (r.io, fh->fd) : NULL;
-						if (iod) {
-							perms = iod->flags;
-							r_io_map_new (r.io, iod->fd, perms, 0LL, 0LL, r_io_desc_size (iod), true);
+						// avoid connecting twice to gdb if first try fails
+						fh = r_core_file_open (&r, pfile, perms, mapaddr);
+						if (fh) {
+							iod = r.io ? r_io_desc_get (r.io, fh->fd) : NULL;
+							if (iod) {
+								perms = iod->flags;
+								r_io_map_new (r.io, iod->fd, perms, 0LL, 0LL, r_io_desc_size (iod), true);
+							}
 						}
 					}
 				}
@@ -1193,6 +1218,9 @@ int main(int argc, char **argv, char **envp) {
 	if (fullfile) {
 		r_core_block_size (&r, r_io_desc_size (iod));
 	}
+	if (perms & R_IO_WRITE) {
+		r_core_cmd0 (&r, "omfg+w");
+	}
 	ret = run_commands (cmds, files, quiet);
 	r_list_free (cmds);
 	r_list_free (evals);
@@ -1241,9 +1269,6 @@ int main(int argc, char **argv, char **envp) {
 				r_core_cmd0 (&r, "aeip");
 			}
 		}
-		if (perms & R_IO_WRITE) {
-			r_core_cmd0 (&r, "omfg+w");
-		}
 		for (;;) {
 #if USE_THREADS
 			do {
@@ -1289,10 +1314,8 @@ int main(int argc, char **argv, char **envp) {
 							if (r_config_get_i (r.config, "dbg.exitkills") &&
 									r_cons_yesno ('y', "Do you want to kill the process? (Y/n)")) {
 								r_debug_kill (r.dbg, 0, false, 9); // KILL
-#if __WINDOWS__
 							} else {
 								r_debug_detach (r.dbg, r.dbg->pid);
-#endif
 							}
 						} else continue;
 					}
@@ -1341,7 +1364,7 @@ beach:
 	r_core_fini (&r);
 	r_cons_set_raw (0);
 	free (file);
-	r_str_const_free ();
+	r_str_const_free (NULL);
 	r_cons_free ();
 	return ret;
 }

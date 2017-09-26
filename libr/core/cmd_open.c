@@ -6,6 +6,7 @@
 #include "r_print.h"
 #include "r_bin.h"
 #include "r_debug.h"
+#include "r_util/r_addr_interval.h"
 
 static const char *help_msg_o[] = {
 	"Usage: o","[com- ] [file] ([offset])","",
@@ -79,12 +80,13 @@ static const char *help_msg_om[] = {
 	"om", " [fd]", "list all defined IO maps for a specific fd",
 	"om", "-mapid", "remove the map with corresponding id",
 	"om", " fd vaddr [size] [paddr] [name]", "create new io map",
-	"omm"," fd", "create default map for given fd. (omm `oq`)",
+	"omm"," [fd]", "create default map for given fd. (omm `oq`)",
 	"om.", "", "show map, that is mapped to current offset",
 	"omn", " mapid [name]", "set/delete name for map with mapid",
 	"omf", " [mapid] rwx", "change flags/perms for current/given map",
 	"omfg", "[+-]rwx", "change flags/perms for all maps (global)",
-	"omr", " mapid addr", "relocate map with corresponding id",
+	"omb", " mapid addr", "relocate map with corresponding id",
+	"omr", " mapid newsize", "resize map with corresponding id",
 	"omp", " mapid", "priorize map with corresponding id",
 	"ompf", "[fd]", "priorize map by fd",
 	"ompb", " binid", "priorize maps of mapped bin with binid",
@@ -160,7 +162,7 @@ static void cmd_open_init(RCore *core) {
 
 // very similiar to section list, must reuse more code
 static void list_maps_visual(RIO *io, ut64 seek, ut64 len, int width, int use_color) {
-	ut64 mul, min = -1, max = -1;
+	ut64 mul, min = -1, max = 0;
 	SdbListIter *iter;
 	RIOMap *s;
 	int j, i;
@@ -173,12 +175,8 @@ static void list_maps_visual(RIO *io, ut64 seek, ut64 len, int width, int use_co
 	// seek = (io->va || io->debug) ? r_io_section_vaddr_to_maddr_try (io, seek) : seek;
 
 	ls_foreach_prev (io->maps, iter, s) {			//this must be prev, maps the previous map allways has lower priority
-		if (min == -1 || s->from < min) {
-			min = s->from;
-		}
-		if (max == -1 || s->to > max) {
-			max = s->to;
-		}
+		min = R_MIN (min, s->itv.addr);
+		max = R_MAX (max, r_itv_end (s->itv) - 1);
 	}
 	mul = (max - min) / width;
 	if (min != -1 && mul != 0) {
@@ -201,24 +199,22 @@ static void list_maps_visual(RIO *io, ut64 seek, ut64 len, int width, int use_co
 			}
 			if (io->va) {
 				io->cb_printf ("%02d%c %s0x%08"PFMT64x"%s |", i,
-						(seek>=s->from&& seek<s->to)?'*':' ',
-						//(seek>=s->vaddr && seek<s->vaddr+s->size)?'*':' ',
-						color, s->from, color_end);
+						r_itv_contain (s->itv, seek) ? '*' : ' ',
+						color, s->itv.addr, color_end);
 			} else {
 				io->cb_printf ("%02d%c %s0x%08"PFMT64x"%s |", i,
-						(seek >= s->from && seek < s->to) ? '*':' ',
-						color, s->from, color_end);
+						r_itv_contain (s->itv, seek) ? '*' : ' ',
+						color, s->itv.addr, color_end);
 			}
-			for (j=0; j<width; j++) {
-				ut64 pos = min + (j*mul);
-				ut64 npos = min + ((j+1)*mul);
-				if (s->from<npos && (s->to)>pos)
-					io->cb_printf ("#");
-				else io->cb_printf ("-");
+			for (j = 0; j < width; j++) {
+				ut64 pos = min + j * mul;
+				ut64 npos = min + (j + 1) * mul;
+				// TODO trailing bytes
+				io->cb_printf (r_itv_overlap2 (s->itv, pos, npos - pos) ? "#" : "-");
 			}
 			io->cb_printf ("| %s0x%08"PFMT64x"%s %s %d %s\n",
-				color, s->to, color_end,
-				r_str_rwx_i (s->flags), s->fd, s->name);
+					color, r_itv_end (s->itv), color_end,
+					r_str_rwx_i (s->flags), s->fd, s->name);
 			i++;
 		}
 		/* current seek */
@@ -422,7 +418,7 @@ static void map_list(RIO *io, int mode, RPrint *print, int fd) {
 		print->cb_printf ("[");
 	}
 	bool first = true;
-	ls_foreach_prev (io->maps, iter, map) {			//this must be prev
+	ls_foreach (io->maps, iter, map) {			//this must be prev
 		if (fd != -1 && map->fd != fd) {
 			continue;
 		}
@@ -435,21 +431,21 @@ static void map_list(RIO *io, int mode, RPrint *print, int fd) {
 				print->cb_printf (",");
 			}
 			first = false;
-			print->cb_printf ("{\"map\":%i,\"fd\":%d,\"delta\":%"PFMT64d",\"from\":%"PFMT64d
-					",\"to\":%"PFMT64d",\"flags\":\"%s\",\"name\":\"%s\"}", map->id, map->fd,
-					map->delta, map->from, map->to,
+			print->cb_printf ("{\"map\":%i,\"fd\":%d,\"delta\":%"PFMT64u",\"from\":%"PFMT64u
+					",\"to\":%"PFMT64u",\"flags\":\"%s\",\"name\":\"%s\"}", map->id, map->fd,
+					map->delta, map->itv.addr, r_itv_end (map->itv),
 					r_str_rwx_i (map->flags), (map->name ? map->name : ""));
 			break;
 		case 1:
 		case '*':
 		case 'r':
 			print->cb_printf ("om %d 0x%"PFMT64x" 0x%"PFMT64x" 0x%"PFMT64x"\n", map->fd,
-					map->from, map->to - map->from + 1, map->delta);
+					map->itv.addr, map->itv.size, map->delta);
 			break;
 		default:
 			print->cb_printf ("%2d fd: %i +0x%08"PFMT64x" 0x%08"PFMT64x
 					" - 0x%08"PFMT64x" %s %s\n", map->id, map->fd,
-					map->delta, map->from, map->to,
+					map->delta, map->itv.addr, r_itv_end (map->itv),
 					r_str_rwx_i (map->flags), (map->name ? map->name : ""));
 			break;
 		}
@@ -512,7 +508,7 @@ static void cmd_omf (RCore *core, const char *input) {
 		// change perms of current map
 		int flags = (arg && *arg)? r_str_rwx (arg): 7;
 		ls_foreach (core->io->maps, iter, map) {
-			if (R_BETWEEN (map->from, core->offset, map->to)) {
+			if (r_itv_contain (map->itv, core->offset)) {
 				map->flags = flags;
 			}
 		}
@@ -530,16 +526,26 @@ static void cmd_open_map(RCore *core, const char *input) {
 
 	switch (input[1]) {
 	case '.':
-		map = r_io_map_get (core->io, core->offset);	
+		map = r_io_map_get (core->io, core->offset);
 		if (map) {
 			core->print->cb_printf ("map: %i fd: %i +0x%"PFMT64x" 0x%"PFMT64x
-			  " - 0x%"PFMT64x" ; %s : %s\n", map->id, map->fd,
-			map->delta, map->from, map->to,
+				" - 0x%"PFMT64x" ; %s : %s\n", map->id, map->fd,
+				map->delta, map->itv.addr, r_itv_end (map->itv),
 			r_str_rwx_i (map->flags), map->name ? map->name : "");
 		}
-
 		break;
-	case 'r':
+	case 'r': // "omr"
+		if (input[2] != ' ') {
+			break;
+		}
+		P = strchr (input+3, ' ');
+		if (P) {
+			id = (ut32)r_num_math (core->num, input+3);	//mapid
+			new = r_num_math (core->num, P+1);
+			r_io_map_resize (core->io, id, new);
+		}
+		break;
+	case 'b': // "omb"
 		if (input[2] != ' ') {
 			break;
 		}
@@ -634,14 +640,14 @@ static void cmd_open_map(RCore *core, const char *input) {
 			s++;
 		}
 		if (*s == '\0') {
-			R_FREE (p);
+			s = p;
 			break;
 		}
 		if (!(q = strchr (s, ' '))) {
 			id = (ut32)r_num_math (core->num, s);
 			map = r_io_map_get (core->io, id);
 			r_io_map_del_name (map);
-			R_FREE (p);
+			s = p;
 			break;
 		}
 		*q = '\0';
@@ -653,12 +659,16 @@ static void cmd_open_map(RCore *core, const char *input) {
 		} else {
 			r_io_map_del_name (map);
 		}
-		R_FREE (p);
+		s = p;
 		break;
 	case 'm': // "omm"
 		{
-			ut64 fd = r_num_math (core->num, input + 3);
+			ut64 fd = input[3]? r_num_math (core->num, input + 3): UT64_MAX;
 			RIODesc *desc = r_io_desc_get (core->io, fd);
+			if (!desc) {
+				fd = r_io_fd_get_current (core->io);
+				desc = r_io_desc_get (core->io, fd);
+			}
 			if (desc) {
 				ut64 size = r_io_desc_size (desc);
 				map = r_io_map_add (core->io, fd, desc->flags, 0, 0, size, true);

@@ -405,11 +405,11 @@ static bool _section_apply_for_anal_patch(RIO *io, RIOSection *sec, bool patch) 
 			at = sec->vaddr + sec->size;
 			// TODO: harden this, handle mapslit
 			// craft the uri for the null-fd
-			if (!r_io_create_mem_map (io, sec, at, true)) {
+			if (!r_io_create_mem_map (io, sec, at, true, false)) {
 				return false;
 			}
 			// we need to create this map for transfering the flags, no real remapping here
-			if (!r_io_create_file_map (io, sec, sec->size, patch)) {
+			if (!r_io_create_file_map (io, sec, sec->size, patch, false)) {
 				return false;
 			}
 			return true;
@@ -420,7 +420,7 @@ static bool _section_apply_for_anal_patch(RIO *io, RIOSection *sec, bool patch) 
 	} else {
 		// same as above
 		if (!sec->filemap) {
-			if (r_io_create_file_map (io, sec, sec->vsize, patch)) {
+			if (r_io_create_file_map (io, sec, sec->vsize, patch, false)) {
 				return true;
 			}
 		}
@@ -549,7 +549,7 @@ static bool _section_reapply_for_emul(RIO *io, RIOSection *sec) {
 			sec->filemap = sec->memmap = 0;
 			return _section_apply (io, sec, R_IO_SECTION_APPLY_FOR_EMULATOR);
 		}
-		size = (size_t) (map->to - map->from + 1);
+		size = map->itv.size;
 		buf = calloc (1, size + 1);
 		if (!buf) {
 			return false;
@@ -603,7 +603,7 @@ static bool _section_reapply_for_emul(RIO *io, RIOSection *sec) {
 	if (!map) {
 		return _section_apply (io, sec, R_IO_SECTION_APPLY_FOR_EMULATOR);
 	}
-	size = (size_t) (map->to - map->from + 1);
+	size = map->itv.size;
 	//save desc to restore later
 	desc = io->desc;
 	r_io_use_fd (io, map->fd);
@@ -667,7 +667,9 @@ R_API bool r_io_section_reapply(RIO *io, ut32 id, RIOSectionApplyMethod method) 
 	if (!(sec = r_io_section_get_i (io, id))) {
 		return false;
 	}
-	return _section_reapply (io, sec, method);
+	bool ret = _section_reapply (io, sec, method);
+	r_io_map_calculate_skyline (io);
+	return ret;
 }
 
 R_API bool r_io_section_reapply_bin(RIO *io, ut32 binid, RIOSectionApplyMethod method) {
@@ -683,5 +685,6 @@ R_API bool r_io_section_reapply_bin(RIO *io, ut32 binid, RIOSectionApplyMethod m
 			_section_reapply (io, sec, method);
 		}
 	}
+	r_io_map_calculate_skyline (io);
 	return ret;
 }

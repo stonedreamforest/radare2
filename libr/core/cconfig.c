@@ -1010,6 +1010,19 @@ static int cb_dbg_forks(void *user, void *data) {
 	return true;
 }
 
+static int cb_dbg_gdb_page_size(void *user, void *data) {
+	RCore *core = (RCore*) user;
+	RConfigNode *node = (RConfigNode*) data;
+	if (core->io && core->io->desc && core->io->desc->plugin
+	    && core->io->desc->plugin->name
+	    && !strcmp (core->io->desc->plugin->name, "gdb")) {
+		char cmd[64];
+		snprintf (cmd, sizeof (cmd), "page_size %"PFMT64d, node->i_value);
+		r_io_system (core->io, cmd);
+	}
+	return true;
+}
+
 static int cb_dbg_execs(void *user, void *data) {
 	RCore *core = (RCore*) user;
 	RConfigNode *node = (RConfigNode*) data;
@@ -1377,13 +1390,31 @@ static int cb_iobuffer(void *user, void *data) {
 	return true;
 }
 
-static int cb_iocache(void *user, void *data) {
-	RCore *core = (RCore *) user;
-	RConfigNode *node = (RConfigNode *) data;
-	if ((int)node->i_value < 0) {
-		r_io_cache_reset (core->io, node->i_value);
+static int cb_io_cache_read(void *user, void *data) {
+	RCore *core = (RCore *)user;
+	RConfigNode *node = (RConfigNode *)data;
+	if (node->i_value) {
+		core->io->cached |= R_IO_READ;
+	} else {
+		core->io->cached &= ~R_IO_READ;
 	}
-	r_io_cache_enable (core->io, node->i_value, node->i_value);
+	return true;
+}
+
+static int cb_io_cache_write(void *user, void *data) {
+	RCore *core = (RCore *)user;
+	RConfigNode *node = (RConfigNode *)data;
+	if (node->i_value) {
+		core->io->cached |= R_IO_WRITE;
+	} else {
+		core->io->cached &= ~R_IO_WRITE;
+	}
+	return true;
+}
+
+static int cb_io_cache(void *user, void *data) {
+	(void)cb_io_cache_read (user, data);
+	(void)cb_io_cache_write (user, data);
 	return true;
 }
 
@@ -1658,18 +1689,6 @@ static int cb_consbreak(void *user, void *data) {
 static int cb_teefile(void *user, void *data) {
 	RConfigNode *node = (RConfigNode *) data;
 	r_cons_singleton()->teefile = node->value;
-	return true;
-}
-
-static int cb_anal_trace(void *user, void *data) {
-	RCore *core = (RCore *) user;
-	RConfigNode *node = (RConfigNode *) data;
-	if (core->anal) {
-		if (node->i_value && !core->anal->esil) {
-			r_core_cmd0 (core, "aei");
-		}
-		core->anal->trace = node->i_value;
-	}
 	return true;
 }
 
@@ -2319,6 +2338,7 @@ R_API int r_core_config_init(RCore *core) {
 	SETPREF ("zign.bytes", "true", "Use bytes patterns for matching");
 	SETPREF ("zign.offset", "true", "Use original offset for matching");
 	SETPREF ("zign.refs", "true", "Use references for matching");
+	SETPREF ("zign.autoload", "false", "Autoload all zignatures located in ~/.config/radare2/zigns");
 
 	/* diff */
 	SETCB ("diff.sort", "addr", &cb_diff_sort, "Specify function diff sorting column see (e diff.sort=?)");
@@ -2388,6 +2408,7 @@ R_API int r_core_config_init(RCore *core) {
 	SETPREF ("dbg.trace.libs", "true", "Trace library code too");
 	SETPREF ("dbg.exitkills", "true", "Kill process on exit");
 	SETPREF ("dbg.exe.path", NULL, "Path to binary being debugged");
+	SETICB ("dbg.gdb.page_size", 4096, &cb_dbg_gdb_page_size, "Page size on gdb target (useful for QEMU)");
 	SETCB ("dbg.consbreak", "false", &cb_consbreak, "SIGINT handle for attached processes");
 
 	r_config_set_getter (cfg, "dbg.swstep", (RConfigCallback)__dbg_swstep_getter);
@@ -2620,7 +2641,6 @@ R_API int r_core_config_init(RCore *core) {
 	SETICB ("search.align", 0, &cb_searchalign, "Only catch aligned search hits");
 	SETI ("search.chunk", 0, "Chunk size for /+ (default size is asm.bits/8");
 	SETI ("search.esilcombo", 8, "Stop search after N consecutive hits");
-	SETI ("search.count", 0, "Start index number at search hits");
 	SETI ("search.distance", 0, "Search string distance");
 	SETPREF ("search.flags", "true", "All search results are flagged, otherwise only printed");
 	SETPREF ("search.overlap", "false", "Look for overlapped search hits");
@@ -2628,10 +2648,14 @@ R_API int r_core_config_init(RCore *core) {
 	SETI ("search.from", -1, "Search start address");
 	n = NODECB ("search.in", "io.maps", &cb_searchin);
 	SETDESC (n, "Specify search boundaries");
-	SETOPTIONS (n, "raw", "block", "file", "io.maps", "io.maprange", "io.section", NULL);
-	SETOPTIONS (n, "io.sections", "io.sections.write", "io.sections.exec",
-				"dbg.stack", "dbg.heap", "dbg.map", "dbg.maps", "dbg.maps.exec",
-				"dbg.maps.write", "anal.fcn", "anal.bb", NULL);
+	SETOPTIONS (n, "raw", "block", "io.map", "io.maps", "io.section", "io.sections",
+		"dbg.map", "dbg.maps", "dbg.stack", "anal.fcn", "anal.bb", NULL);
+
+	SETOPTIONS (n, "raw", "block", "io.map", "io.maps",
+			"io.sections", "io.sections.write", "io.sections.exec", "io.sections.readonly",
+			"dbg.stack", "dbg.heap", "dbg.map",
+			"dbg.maps", "dbg.maps.exec", "dbg.maps.write", "dbg.maps.readonly",
+			"anal.fcn", "anal.bb", NULL);
 	SETICB ("search.kwidx", 0, &cb_search_kwidx, "Store last search index count");
 	SETPREF ("search.prefix", "hit", "Prefix name in search hits label");
 	SETPREF ("search.show", "true", "Show search results");
@@ -2649,7 +2673,9 @@ R_API int r_core_config_init(RCore *core) {
 	SETCB ("io.buffer", "false", &cb_iobuffer, "Load and use buffer cache if enabled");
 	SETI ("io.buffer.from", 0, "Lower address of buffered cache");
 	SETI ("io.buffer.to", 0, "Higher address of buffered cache");
-	SETCB ("io.cache", "false", &cb_iocache, "Enable cache for io changes");
+	SETCB ("io.cache", "false", &cb_io_cache, "Change both of io.cache.{read,write}");
+	SETCB ("io.cache.read", "false", &cb_io_cache_read, "Enable read cache for vaddr (or paddr when io.va=0)");
+	SETCB ("io.cache.write", "false", &cb_io_cache_write, "Enable write cache for vaddr (or paddr when io.va=0)");
 	SETCB ("io.pcache", "false", &cb_iopcache, "io.cache for p-level");
 	SETCB ("io.pcache.write", "false", &cb_iopcachewrite, "Enable write-cache");
 	SETCB ("io.pcache.read", "false", &cb_iopcacheread, "Enable read-cache");

@@ -23,35 +23,10 @@ static bool __plugin_open(RIO *io, const char *file, bool many) {
 }
 
 static int debug_gdb_read_at(ut8 *buf, int sz, ut64 addr) {
-	ut32 size_max;
-	ut32 packets;
-	ut32 last;
-	ut32 x;
-	int ret = 0;
 	if (sz < 1 || addr >= UT64_MAX || !desc) {
 		return -1;
 	}
-	size_max = desc->data_max / 2;
-	if (size_max < 1) {
-		size_max = sz;
-	}
-	packets = sz / size_max;
-	last = sz % size_max;
-	for (x = 0; x < packets; x++) {
-		if (gdbr_read_memory (desc, addr + (x * size_max), size_max) < 0) {
-			return ret;
-		}
-		memcpy ((buf + (x * size_max)), desc->data + (x * size_max), R_MIN (sz, size_max));
-		ret += desc->data_len;
-	}
-	if (last) {
-		if (gdbr_read_memory (desc, addr + x * size_max, last) < 0) {
-			return ret;
-		}
-		memcpy ((buf + x * size_max), desc->data + (x * size_max), last);
-		ret += desc->data_len;
-	}
-	return ret;
+	return gdbr_read_memory (desc, addr, buf, sz);
 }
 
 static int debug_gdb_write_at(const ut8 *buf, int sz, ut64 addr) {
@@ -140,7 +115,7 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 
 	if (gdbr_connect (&riog->desc, host, i_port) == 0) {
 		desc = &riog->desc;
-		if (pid) { // FIXME this is here for now because RDebug's pid and libgdbr's aren't properly synced.
+		if (pid > 0) { // FIXME this is here for now because RDebug's pid and libgdbr's aren't properly synced.
 			desc->pid = i_pid;
 			if (gdbr_attach (desc, i_pid) < 0) {
 				eprintf ("gdbr: Failed to attach to PID %i\n", i_pid);
@@ -205,6 +180,7 @@ static int __close(RIODesc *fd) {
 
 static int __getpid(RIODesc *fd) {
 	return desc ? desc->pid : -1;
+#if 0
 	// dupe for ? r_io_desc_get_pid (desc);
 	if (!desc || !desc->data) {
 		return -1;
@@ -217,6 +193,7 @@ static int __getpid(RIODesc *fd) {
 		return iodd->pid;
 	}
 	return -1;
+#endif
 }
 
 static int __gettid(RIODesc *fd) {
@@ -227,20 +204,34 @@ int send_msg(libgdbr_t* g, const char* command);
 int read_packet(libgdbr_t* instance);
 
 static int __system(RIO *io, RIODesc *fd, const char *cmd) {
-        //printf("ptrace io command (%s)\n", cmd);
-        /* XXX ugly hack for testing purposes */
-        if (!cmd[0] || cmd[0] == '?' || !strcmp (cmd, "help")) {
-                eprintf ("Usage: =!cmd args\n"
-                         " =!pid             - show targeted pid\n"
-                         " =!pkt s           - send packet 's'\n"
-                         " =!monitor cmd     - hex-encode monitor command and pass"
-                                             " to target interpreter\n"
-                         " =!detach [pid]    - detach from remote/detach specific pid\n"
-                         " =!inv.reg         - invalidate reg cache\n"
-                         " =!pktsz           - get max packet size used\n"
-                         " =!pktsz bytes     - set max. packet size as 'bytes' bytes\n"
-                         " =!exec_file [pid] - get file which was executed for"
-                                             " current/specified pid\n");
+	if (!desc) {
+		return true;
+	}
+	if (!cmd[0] || cmd[0] == '?' || !strcmp (cmd, "help")) {
+		eprintf ("Usage: =!cmd args\n"
+			 " =!pid             - show targeted pid\n"
+			 " =!pkt s           - send packet 's'\n"
+			 " =!monitor cmd     - hex-encode monitor command and pass"
+			                     " to target interpreter\n"
+			 " =!detach [pid]    - detach from remote/detach specific pid\n"
+			 " =!inv.reg         - invalidate reg cache\n"
+			 " =!pktsz           - get max packet size used\n"
+			 " =!pktsz bytes     - set max. packet size as 'bytes' bytes\n"
+			 " =!page_size       - get current setting for page size\n"
+			 " =!page_size bytes - set page size for memory reads (useful for qemu)\n"
+			 " =!exec_file [pid] - get file which was executed for"
+			                     " current/specified pid\n");
+		return true;
+	}
+	if (!strncmp (cmd, "page_size", 9)) {
+		int page_size;
+		if (isspace (cmd[9]) && isdigit (cmd[10])) {
+			if ((page_size = atoi (cmd + 10)) >= 64) { // 64 is hardcoded min packet size
+				desc->page_size = page_size;
+			}
+			return true;
+		}
+		io->cb_printf ("page size: %d bytes\n", desc->page_size);
 		return true;
 	}
 	if (!strncmp (cmd, "pktsz", 5)) {
@@ -255,7 +246,7 @@ static int __system(RIO *io, RIODesc *fd, const char *cmd) {
 			// pktsz = 0 doesn't make sense
 			return false;
 		}
-		desc->stub_features.pkt_sz = R_MAX (pktsz, 64); // min = 64
+		desc->stub_features.pkt_sz = R_MAX (pktsz, 8); // min = 64
 		return true;
 	}
 	if (!strncmp (cmd, "detach", 6)) {

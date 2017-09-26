@@ -129,7 +129,8 @@ static const char *help_msg_dot[] = {
 	"Usage:", ".[r2cmd] | [file] | [!command] | [(macro)]", " # define macro or load r2, cparse or rlang file",
 	".", "", "repeat last command backward",
 	".", "r2cmd", "interpret the output of the command as r2 commands",
-	"..", "", "repeat last command forward (same as \\n)",
+	"..", " [file]", "run the output of the execution of a script as r2 commands",
+	"...", "", "repeat last command forward (same as \\n)",
 	".:", "8080", "listen for commands on given tcp port",
 	".", " foo.r2", "interpret r2 script",
 	".-", "", "open cfg.editor and interpret tmp file",
@@ -766,7 +767,15 @@ static int cmd_interpret(void *data, const char *input) {
 		}
 		break;
 	case '.': // ".." same as \n
-		r_core_cmd_repeat (core, 1);
+		if (input[1] == '.') { // ... same as \n with e cmd.repeat=true
+			r_core_cmd_repeat (core, 1);
+		} else {
+			char *str = r_core_cmd_str_pipe (core, input);
+			if (str) {
+				r_core_cmd (core, str, 0);
+				free (str);
+			}
+		}
 		break;
 	case '-': // ".-"
 		if (input[1] == '?') {
@@ -814,13 +823,17 @@ static int cmd_interpret(void *data, const char *input) {
 					break;
 				}
 				eol = strchr (ptr, '\n');
-				if (eol) *eol = '\0';
+				if (eol) {
+					*eol = '\0';
+				}
 				if (*ptr) {
 					char *p = r_str_append (strdup (ptr), filter);
 					r_core_cmd0 (core, p);
 					free (p);
 				}
-				if (!eol) break;
+				if (!eol) {
+					break;
+				}
 				ptr = eol + 1;
 			}
 		}
@@ -878,9 +891,12 @@ static int cmd_kuery(void *data, const char *input) {
 		if (!s) s = core->sdb;
 		for (;;) {
 			r_line_set_prompt (p);
-			if (r_cons_fgets (buf, buflen, 0, NULL) < 1)
+			if (r_cons_fgets (buf, buflen, 0, NULL) < 1) {
 				break;
-			if (!*buf) break;
+			}
+			if (!*buf) {
+				break;
+			}
 			out = sdb_querys (s, NULL, 0, buf);
 			if (out) {
 				r_cons_println (out);
@@ -1478,6 +1494,11 @@ static int r_core_cmd_subst(RCore *core, char *cmd) {
 	const char *cmdrep = NULL;
 	cmd = r_str_trim_head_tail (icmd);
 	// lines starting with # are ignored (never reach cmd_hash()), except #! and #?
+	if (!*cmd) {
+		r_core_cmd_repeat (core, true);
+		ret = r_core_cmd_nullcallback (core);
+		goto beach;
+	}
 	if (!icmd || (cmd[0] == '#' && cmd[1] != '!' && cmd[1] != '?')) {
 		goto beach;
 	}
@@ -1605,6 +1626,18 @@ static int r_core_cmd_subst_i(RCore *core, char *cmd, char *colon) {
 		return 0;
 	}
 	cmd = r_str_trim_head_tail (cmd);
+
+	char *$0 = strstr (cmd, "$(");
+	if ($0) {
+		char *$1 = strchr ($0 + 2, ')');
+		if ($1) {
+			*$0 = '`';
+			*$1 = '`';
+			memmove ($0 + 1, $0 + 2, strlen ($0) + 1);
+		} else {
+			eprintf ("Unterminated $() block\n");
+		}
+	}
 
 	/* quoted / raw command */
 	switch (*cmd) {
@@ -1986,12 +2019,12 @@ next2:
 	/* sub commands */
 	ptr = strchr (cmd, '`');
 	if (ptr) {
-		int empty = 0;
+		bool empty = false;
 		int oneline = 1;
 		if (ptr[1] == '`') {
 			memmove (ptr, ptr + 1, strlen (ptr));
 			oneline = 0;
-			empty = 1;
+			empty = true;
 		}
 		ptr2 = strchr (ptr + 1, '`');
 		if (empty) {
@@ -2061,7 +2094,8 @@ next2:
 	int rc = 0;
 	if (ptr) {
 		char *f, *ptr2 = strchr (ptr + 1, '!');
-		ut64 addr = UT64_MAX;
+		ut64 addr = core->offset;
+		bool addr_is_set = false;
 		char *tmpbits = NULL;
 		const char *offstr = NULL;
 		ut64 tmpbsz = core->blocksize;
@@ -2227,6 +2261,7 @@ ignore:
 		offstr = r_str_trim_head (ptr + 1);
 
 		addr = r_num_math (core->num, offstr);
+		addr_is_set = true;
 		if (isalpha ((ut8)ptr[1]) && !addr) {
 			if (!r_flag_get (core->flags, ptr + 1)) {
 				eprintf ("Invalid address (%s)\n", ptr + 1);
@@ -2293,12 +2328,12 @@ next_arroba:
 				tmpseek = true;
 			}
 			if (usemyblock) {
-				if (addr != UT64_MAX) {
+				if (addr_is_set) {
 					core->offset = addr;
 				}
 				ret = r_cmd_call (core->rcmd, r_str_trim_head (cmd));
 			} else {
-				if (addr != UT64_MAX) {
+				if (addr_is_set) {
 					if (ptr[1]) {
 						r_core_seek (core, addr, 1);
 						r_core_block_read (core);
@@ -3235,7 +3270,7 @@ R_API char *r_core_cmd_str(RCore *core, const char *cmd) {
 
 R_API void r_core_cmd_repeat(RCore *core, int next) {
 	// Fix for backtickbug px`~`
-	if (!core->lastcmd || core->cmd_depth + 1 < R_CORE_CMD_DEPTH) {
+	if (!core->lastcmd || core->cmd_depth < 1) {
 		return;
 	}
 	switch (*core->lastcmd) {
@@ -3255,13 +3290,21 @@ R_API void r_core_cmd_repeat(RCore *core, int next) {
 	case 'p': // print
 	case 'x':
 	case '$':
-		if (next) {
-			r_core_seek (core, core->offset + core->blocksize, 1);
-		} else {
-			if (core->blocksize > core->offset) {
-				r_core_seek (core, 0, 1);
+		if (!strncmp (core->lastcmd, "pd", 2)) {
+			if (core->lastcmd[2]== ' ') {
+				r_core_cmdf (core, "so %s", core->lastcmd + 3);
 			} else {
-				r_core_seek (core, core->offset - core->blocksize, 1);
+				r_core_cmd0 (core, "so `pi~?`");
+			}
+		} else {
+			if (next) {
+				r_core_seek (core, core->offset + core->blocksize, 1);
+			} else {
+				if (core->blocksize > core->offset) {
+					r_core_seek (core, 0, 1);
+				} else {
+					r_core_seek (core, core->offset - core->blocksize, 1);
+				}
 			}
 		}
 		r_core_cmd0 (core, core->lastcmd);

@@ -3,10 +3,10 @@
 #ifndef R2_IO_H
 #define R2_IO_H
 
-#include <r_socket.h>
-#include <r_list.h>
-#include <r_util.h>
-#include <r_vector.h>
+#include "r_list.h"
+#include "r_socket.h"
+#include "r_util.h"
+#include "r_vector.h"
 
 #define R_IO_READ	4
 #define R_IO_WRITE	2
@@ -61,8 +61,7 @@ typedef struct r_io_t {
 	int addrbytes;
 	int aslr;
 	int autofd;
-	bool cached;
-	bool cached_read;
+	int cached;
 	int p_cache;
 	int buffer_enabled;
 	int debug;
@@ -159,16 +158,14 @@ typedef struct r_io_map_t {
 	int fd;
 	int flags;
 	ut32 id;
-	ut64 from;
-	ut64 to;
+	RAddrInterval itv;
 	ut64 delta; //this delta means paddr when talking about section
 	char *name;
 } RIOMap;
 
 typedef struct r_io_map_skyline_t {
 	RIOMap *map;
-	ut64 from;
-	ut64 to;
+	RAddrInterval itv;
 } RIOMapSkyline;
 
 typedef struct r_io_section_t {
@@ -307,9 +304,10 @@ R_API void r_io_map_fini (RIO *io);
 R_API bool r_io_map_is_in_range (RIOMap *map, ut64 from, ut64 to);
 R_API void r_io_map_set_name (RIOMap *map, const char *name);
 R_API void r_io_map_del_name (RIOMap *map);
-R_API bool r_io_map_is_in_range (RIOMap* map, ut64 from, ut64 to);
 R_API RIOMap *r_io_map_add_next_available(RIO *io, int fd, int flags, ut64 delta, ut64 addr, ut64 size, ut64 load_align);
 R_API void r_io_map_calculate_skyline(RIO *io);
+R_API RList* r_io_map_get_for_fd(RIO *io, int fd);
+R_API bool r_io_map_resize(RIO *io, ut32 id, ut64 newsize);
 
 //io.c
 R_API RIO *r_io_new (void);
@@ -406,7 +404,6 @@ R_API bool r_io_desc_fini (RIO *io);
 /* io/cache.c */
 R_API int r_io_cache_invalidate(RIO *io, ut64 from, ut64 to);
 R_API void r_io_cache_commit(RIO *io, ut64 from, ut64 to);
-R_API void r_io_cache_enable(RIO *io, int read, int write);
 R_API void r_io_cache_init(RIO *io);
 R_API int r_io_cache_list(RIO *io, int rad);
 R_API void r_io_cache_reset(RIO *io, int set);
@@ -480,8 +477,8 @@ R_API bool r_io_use_fd (RIO *io, int fd);
 #define r_io_range_free(x)	free(x)
 
 /* io/ioutils.c */
-R_API bool r_io_create_mem_map(RIO *io, RIOSection *sec, ut64 at, bool null);
-R_API bool r_io_create_file_map(RIO *io, RIOSection *sec, ut64 size, bool patch);
+R_API bool r_io_create_mem_map(RIO *io, RIOSection *sec, ut64 at, bool null, bool do_skyline);
+R_API bool r_io_create_file_map(RIO *io, RIOSection *sec, ut64 size, bool patch, bool do_skyline);
 R_API bool r_io_create_mem_for_section(RIO *io, RIOSection *sec);
 R_API bool r_io_is_valid_offset (RIO *io, ut64 offset, int hasperm);
 R_API bool r_io_addr_is_mapped(RIO *io, ut64 vaddr);

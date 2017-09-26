@@ -1538,6 +1538,16 @@ R_API int r_str_nlen_w(const char *str, int n) {
 	return len;
 }
 
+R_API bool r_str_is_ascii(const char *str) {
+	const ut8 *ptr;
+	for (ptr = (const ut8 *)str; *ptr; ptr++) {
+		if (*ptr > 0x7f) {
+			return false;
+		}
+	}
+	return true;
+}
+
 R_API int r_str_is_printable(const char *str) {
 	while (*str) {
 		int ulen = r_utf8_decode ((const ut8*)str, strlen (str), NULL);
@@ -2681,37 +2691,52 @@ R_API const char *r_str_pad(const char ch, int sz) {
 	return pad;
 }
 
-static char **consts = NULL;
+static char **__consts = NULL;
 
-R_API const char *r_str_const(const char *ptr) {
+R_API const char *r_str_const_at(char ***consts, const char *ptr) {
+	if (!consts) {
+		consts = &__consts;
+	}
 	int ctr = 0;
 	if (!ptr) {
 		return NULL;
 	}
-	if (consts) {
+	if (*consts) {
 		const char *p;
-		while ((p = consts[ctr])) {
+		while ((p = (*consts)[ctr])) {
 			if (ptr == p || !strcmp (ptr, p)) {
 				return p;
 			}
 			ctr ++;
 		}
-		consts = realloc (consts, (2+ctr) * sizeof(void*));
+		char **res = realloc (*consts, (ctr + 2) * sizeof (void*));
+		if (res) {
+			*consts = res;
+		} else {
+			return NULL;
+		}
 	} else {
-		consts = malloc (sizeof (void*) * 2);
+		*consts = malloc (sizeof (void*) * 2);
 	}
-	consts[ctr] = strdup (ptr);
-	consts[ctr+1] = NULL;
-	return consts[ctr];
+	(*consts)[ctr] = strdup (ptr);
+	(*consts)[ctr + 1] = NULL;
+	return (*consts)[ctr];
 }
 
-R_API void r_str_const_free() {
+R_API const char *r_str_const(const char *ptr) {
+	return r_str_const_at (&__consts, ptr);
+}
+
+R_API void r_str_const_free(char ***consts) {
 	int i;
-	if (consts) {
-		for (i = 0; consts[i]; i++) {
-			free (consts[i]);
+	if (!consts) {
+		consts = &__consts;
+	}
+	if (*consts) {
+		for (i = 0; (*consts)[i]; i++) {
+			free ((*consts)[i]);
 		}
-		R_FREE (consts);
+		R_FREE (*consts);
 	}
 }
 

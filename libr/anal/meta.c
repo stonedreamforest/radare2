@@ -367,7 +367,7 @@ R_API const char *r_meta_type_to_string(int type) {
 
 static bool isFirst = true;
 static void printmetaitem(RAnal *a, RAnalMetaItem *d, int rad) {
-	char *pstr, *str;
+	char *pstr, *str, *base64_str;
 	//eprintf ("%d %d\n", d->space, a->meta_spaces.space_idx);
 	if (a->meta_spaces.space_idx != -1) {
 		if (a->meta_spaces.space_idx != d->space) {
@@ -389,9 +389,20 @@ static void printmetaitem(RAnal *a, RAnalMetaItem *d, int rad) {
 //		r_str_sanitize (str);
 		switch (rad) {
 		case 'j':
-			a->cb_printf ("%s{\"offset\":%"PFMT64d", \"type\":\"%s\", \"name\":\"%s\"}",
+			a->cb_printf ("%s{\"offset\":%"PFMT64d", \"type\":\"%s\", \"name\":",
 				isFirst? "": ",",
-				d->from, r_meta_type_to_string (d->type), str);
+				d->from, r_meta_type_to_string (d->type));
+			if (d->type == 's' && (base64_str = r_base64_encode_dyn (d->str, -1))) {
+				a->cb_printf ("\"%s\"", base64_str);
+				free (base64_str);
+			} else {
+				a->cb_printf ("\"%s\"", str);
+			}
+			if (d->type == 's') {
+				a->cb_printf (", \"enc\":\"latin1\", \"ascii\":%s",
+				              r_str_bool (r_str_is_ascii (d->str)));
+			}
+			a->cb_printf ("}");
 			isFirst = false;
 			break;
 		case 0:
@@ -431,26 +442,27 @@ static void printmetaitem(RAnal *a, RAnalMetaItem *d, int rad) {
 				free (s);
 				}
 				break;
-			case 'h': /* hidden */
 			case 's': /* string */
 				if (rad) {
 					a->cb_printf ("%s %d @ 0x%08"PFMT64x" # %s\n",
 							r_meta_type_to_string (d->type),
 							(int)d->size, d->from, pstr);
 				} else {
-					// TODO: use b64 here
-					a->cb_printf ("0x%08"PFMT64x" string[%d] \"%s\"\n",
-							d->from, (int)d->size, pstr);
+					bool ascii = r_str_is_ascii (d->str);
+					a->cb_printf ("0x%08"PFMT64x" %s[%d] \"%s\"\n",
+					              d->from, ascii ? "ascii" : "latin1", (int)d->size, pstr);
 				}
 				break;
+			case 'h': /* hidden */
 			case 'd': /* data */
 				if (rad) {
 					a->cb_printf ("%s %d @ 0x%08"PFMT64x"\n",
 							r_meta_type_to_string (d->type),
 							(int)d->size, d->from);
 				} else {
-					a->cb_printf ("0x%08"PFMT64x" data %s %d\n",
-						d->from, r_meta_type_to_string (d->type), (int)d->size);
+					const char *dtype = d->type == 'h' ? "hidden" : "data";
+					a->cb_printf ("0x%08" PFMT64x " %s %s %d\n",
+					              d->from, dtype, r_meta_type_to_string (d->type), (int)d->size);
 
 				}
 				break;
@@ -676,10 +688,8 @@ static int meta_count_cb(void *user, const char *k, const char *v) {
 	return 1;
 }
 
-R_API int r_meta_space_count_for(RAnal *a, int ctx) {
-	myMetaUser mu = {0};
-	mu.ctx = ctx;
-	int type = a->meta_spaces.space_idx;
-	r_meta_list_cb (a, type, 0, meta_count_cb, &mu, UT64_MAX);
+R_API int r_meta_space_count_for(RAnal *a, int space_idx) {
+	myMetaUser mu = {.ctx = space_idx};
+	r_meta_list_cb (a, R_META_TYPE_ANY, 0, meta_count_cb, &mu, UT64_MAX);
 	return mu.count;
 }

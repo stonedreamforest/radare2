@@ -1304,15 +1304,20 @@ R_API void r_core_rtr_pushout(RCore *core, const char *input) {
 	const char *cmd = NULL;
 	char *str = NULL;
 	if (fd) {
-		for (rtr_n = 0; rtr_host[rtr_n].fd->fd != fd \
-			&& rtr_n < RTR_MAX_HOSTS - 1; rtr_n++);
+		for (rtr_n = 0; rtr_host[rtr_n].fd && rtr_n < RTR_MAX_HOSTS - 1; rtr_n++) {
+			if (rtr_host[rtr_n].fd->fd != fd) {
+				continue;
+			}
+		}
 		if (!(cmd = strchr (input, ' '))) {
 			eprintf ("Error\n");
 			return;
 		}
-	} else cmd = input;
+	} else {
+		cmd = input;
+	}
 
-	if (!rtr_host[rtr_n].fd->fd) {
+	if (!rtr_host[0].fd || !rtr_host[rtr_n].fd->fd) {
 		eprintf("Error: Unknown host\n");
 		return;
 	}

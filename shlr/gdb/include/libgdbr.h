@@ -17,6 +17,7 @@ typedef unsigned int ssize_t;
 
 #define GDB_REMOTE_TYPE_GDB 0
 #define GDB_REMOTE_TYPE_LLDB 1
+#define GDB_MAX_PKTSZ 4
 
 /*!
  * Structure that saves a gdb message
@@ -171,6 +172,7 @@ typedef struct libgdbr_t {
 	int last_code;
 	int pid; // little endian
 	int tid; // little endian
+	int page_size; // page size for target (useful for qemu)
 	bool attached; // Remote server attached to process or created
 	libgdbr_stub_features_t stub_features;
 

@@ -183,11 +183,14 @@ static int r_debug_native_attach (RDebug *dbg, int pid) {
 #elif __APPLE__
 	return xnu_attach (dbg, pid);
 #elif __KFBSD__
-	if (ptrace (PT_ATTACH, pid, 0, 0) != -1) perror ("ptrace (PT_ATTACH)");
+	if (ptrace (PT_ATTACH, pid, 0, 0) != -1) {
+		perror ("ptrace (PT_ATTACH)");
+	}
 	return pid;
 #else
 	int ret = ptrace (PTRACE_ATTACH, pid, 0, 0);
 	if (ret != -1) {
+		eprintf ("Trying to attach to %d\n", pid);
 		perror ("ptrace (PT_ATTACH)");
 	}
 	return pid;
@@ -268,6 +271,9 @@ static int r_debug_native_continue(RDebug *dbg, int pid, int tid, int sig) {
 	}
 
 	int ret = ptrace (PTRACE_CONT, pid, NULL, contsig);
+	if (ret) {
+		perror ("PTRACE_CONT");
+	}
 	if (dbg->continue_all_threads && dbg->n_threads) {
 		RList *list = dbg->threads;
 		RDebugPid *th;
@@ -322,7 +328,6 @@ static bool tracelib(RDebug *dbg, const char *mode, PLIB_ITEM item) {
  * Returns R_DEBUG_REASON_*
  */
 static RDebugReasonType r_debug_native_wait (RDebug *dbg, int pid) {
-	int status = -1;
 	RDebugReasonType reason = R_DEBUG_REASON_UNKNOWN;
 
 #if __WINDOWS__ && !__CYGWIN__
@@ -410,7 +415,7 @@ static RDebugReasonType r_debug_native_wait (RDebug *dbg, int pid) {
 		break;
 	} while (true);
 	r_cons_break_pop ();
-	status = reason? 1: 0;
+	int status = reason? 1: 0;
 #else
 #if __linux__ && !defined (WAIT_ON_ALL_CHILDREN)
 	reason = linux_dbg_wait (dbg, dbg->tid);
@@ -428,6 +433,7 @@ static RDebugReasonType r_debug_native_wait (RDebug *dbg, int pid) {
 		}
 	}
 #else
+	int status = -1;
 	// XXX: this is blocking, ^C will be ignored
 #ifdef WAIT_ON_ALL_CHILDREN
 	int ret = waitpid (-1, &status, WAITPID_FLAGS);
@@ -1661,8 +1667,12 @@ RDebugPlugin r_debug_plugin_native = {
 	.bits = R_SYS_BITS_32 | R_SYS_BITS_64,
 	.arch = "mips",
 	.canstep = 0,
-#elif __POWERPC__
+#elif __powerpc__
+# if __powerpc64__
+	.bits = R_SYS_BITS_32 | R_SYS_BITS_64,
+# else
 	.bits = R_SYS_BITS_32,
+#endif
 	.arch = "ppc",
 	.canstep = 1,
 #else
@@ -1687,7 +1697,7 @@ RDebugPlugin r_debug_plugin_native = {
 	.wait = &r_debug_native_wait,
 	.kill = &r_debug_native_kill,
 	.frames = &r_debug_native_frames, // rename to backtrace ?
-	.reg_profile = (void *)r_debug_native_reg_profile,
+	.reg_profile = r_debug_native_reg_profile,
 	.reg_read = r_debug_native_reg_read,
 	.info = r_debug_native_info,
 	.reg_write = (void *)&r_debug_native_reg_write,

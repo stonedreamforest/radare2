@@ -106,9 +106,9 @@ int gdbr_connect(libgdbr_t *g, const char *host, int port) {
 	g->stub_features.pkt_sz = 64;
 	char *env_pktsz_str;
 	ut32 env_pktsz;
-	if ((env_pktsz_str = getenv ("R2_GDB_PKTSZ"))) {
+	if ((env_pktsz_str = r_sys_getenv ("R2_GDB_PKTSZ"))) {
 		if ((env_pktsz = (ut32) strtoul (env_pktsz_str, NULL, 10))) {
-			g->stub_features.pkt_sz = R_MAX (env_pktsz, 64);
+			g->stub_features.pkt_sz = R_MAX (env_pktsz, GDB_MAX_PKTSZ);
 		}
 	}
 	ret = snprintf (tmp.buf, sizeof (tmp.buf) - 1, "%d", port);
@@ -118,7 +118,7 @@ int gdbr_connect(libgdbr_t *g, const char *host, int port) {
 	if (*host == '/') {
 		ret = r_socket_connect_serial (g->sock, host, port, 1);
 	} else {
-		ret = r_socket_connect_tcp (g->sock, host, tmp.buf, 200);
+		ret = r_socket_connect_tcp (g->sock, host, tmp.buf, 400);
 	}
 	if (!ret) {
 		return -1;
@@ -139,7 +139,7 @@ int gdbr_connect(libgdbr_t *g, const char *host, int port) {
 		return ret;
 	}
 	if (env_pktsz > 0) {
-		g->stub_features.pkt_sz = R_MAX (R_MIN (env_pktsz, g->stub_features.pkt_sz), 64);
+		g->stub_features.pkt_sz = R_MAX (R_MIN (env_pktsz, g->stub_features.pkt_sz), GDB_MAX_PKTSZ);
 	}
 	// If no-ack supported, enable no-ack mode (should speed up things)
 	if (g->stub_features.QStartNoAckMode) {
@@ -485,80 +485,117 @@ int gdbr_read_registers(libgdbr_t *g) {
 	if (ret < 0) {
 		return ret;
 	}
-
 	if (read_packet (g) < 0 || handle_g (g) < 0) {
 		return -1;
 	}
 	if (reg_cache.init) {
 		reg_cache.buflen = g->data_len;
+		memset (reg_cache.buf, 0, reg_cache.buflen);
 		memcpy (reg_cache.buf, g->data, reg_cache.buflen);
 		reg_cache.valid = true;
 	}
 	return 0;
 }
 
-int gdbr_read_memory(libgdbr_t *g, ut64 address, ut64 len) {
-	char command[64] = {0};
-	int ret;
-	ut64 num_pkts, last, data_sz, ret_len;
-	int pkt;
+static int gdbr_read_memory_page(libgdbr_t *g, ut64 address, ut8 *buf, int len) {
+	char command[128] = {0};
+	int last, ret_len, pkt;
 	if (!g) {
 		return -1;
 	}
-	if (len > g->data_max) {
-		eprintf ("%s: Requested read too long: (%d bytes)\n", __func__, (unsigned) len);
-		return -1;
-	}
-	g->stub_features.pkt_sz = R_MAX (g->stub_features.pkt_sz, 64);
-	data_sz = g->stub_features.pkt_sz / 2;
-	num_pkts = len / data_sz;
+	g->stub_features.pkt_sz = R_MAX (g->stub_features.pkt_sz, GDB_MAX_PKTSZ);
+	int data_sz = g->stub_features.pkt_sz / 2;
+	int num_pkts = len / data_sz;
 	last = len % data_sz;
 	ret_len = 0;
-	ret = 0;
-	if (last) {
-		if ((ret = snprintf (command, sizeof (command) - 1,
-				     "%s%016"PFMT64x ",%"PFMT64x, CMD_READMEM,
-				     address + (num_pkts * data_sz),
-				     last)) < 0) {
+	for (pkt = 0; pkt < num_pkts; pkt++) {
+		if (snprintf (command, sizeof (command) - 1,
+			      "%s%"PFMT64x ",%"PFMT64x, CMD_READMEM,
+			      (ut64)address + (pkt * data_sz),
+			      (ut64)data_sz) < 0) {
 			return -1;
 		}
-		if ((ret = send_msg (g, command)) < 0) {
+		if (send_msg (g, command) < 0) {
 			return -1;
 		}
-		if ((ret = read_packet (g)) < 0) {
+		if (read_packet (g) < 0) {
 			return -1;
 		}
-		if ((ret = handle_m (g)) < 0) {
+		if (handle_m (g) < 0) {
 			return -1;
 		}
-		if (num_pkts) {
-			memmove (g->data + (num_pkts * data_sz), g->data, g->data_len);
+		int delta = (pkt * data_sz);
+
+		if (delta > len) {
+			eprintf ("oops\n");
+			break;
 		}
-		ret_len += g->data_len;
-	}
-	for (pkt = num_pkts - 1; pkt >= 0; pkt--) {
-		if ((ret = snprintf (command, sizeof (command) - 1,
-				     "%s%016"PFMT64x ",%"PFMT64x, CMD_READMEM,
-				     address + (pkt * data_sz),
-				     data_sz)) < 0) {
-			return -1;
+		int left = R_MIN (g->data_len, len - delta);
+		if (left > 0) {
+			memcpy (buf + delta, g->data, left);
+			ret_len += g->data_len;
 		}
-		if ((ret = send_msg (g, command)) < 0) {
-			return -1;
-		}
-		if ((ret = read_packet (g)) < 0) {
-			return -1;
-		}
-		if ((ret = handle_m (g)) < 0) {
-			return -1;
-		}
-		if (pkt) {
-			memmove (g->data + (pkt * data_sz), g->data, g->data_len);
-		}
-		ret_len += g->data_len;
         }
-	g->data_len = ret_len;
-	return ret;
+	if (last) {
+		if (snprintf (command, sizeof (command) - 1,
+			      "%s%016"PFMT64x ",%"PFMT64x, CMD_READMEM,
+			      (ut64)(address + (num_pkts * data_sz)),
+			      (ut64)last) < 0) {
+			return -1;
+		}
+		if (send_msg (g, command) < 0) {
+			return -1;
+		}
+		if (read_packet (g) < 0) {
+			return -1;
+		}
+		if (handle_m (g) < 0) {
+			return -1;
+		}
+		int delta = num_pkts * data_sz;
+		int left = R_MIN (g->data_len, len - delta);
+		if (left > 0) {
+			memcpy (buf + delta, g->data, left);
+			ret_len += g->data_len;
+		}
+	}
+	return ret_len;
+}
+
+int gdbr_read_memory(libgdbr_t *g, ut64 address, ut8 *buf, int len) {
+	int ret_len, ret, tmp;
+	int page_size = g->page_size;
+	ret_len = 0;
+	// Read and round up to page size
+	tmp = page_size - (address & (page_size - 1));
+	if (tmp >= len) {
+		return gdbr_read_memory_page (g, address, buf, len);
+	}
+	if ((ret = gdbr_read_memory_page (g, address, buf, tmp)) != tmp) {
+		return ret;
+	}
+	len -= tmp;
+	address += tmp;
+	buf += tmp;
+	ret_len += ret;
+	// Read complete pages
+	while (len > page_size) {
+		if ((ret = gdbr_read_memory_page (g, address, buf, page_size)) != page_size) {
+			if (ret < 0) {
+				return ret_len;
+			}
+			return ret_len + ret;
+		}
+		len -= page_size;
+		address += page_size;
+		buf += page_size;
+		ret_len += page_size;
+	}
+	// Read left-overs
+	if ((ret = gdbr_read_memory_page (g, address, buf, len)) < 0) {
+		return ret_len;
+	}
+	return ret_len + ret;
 }
 
 int gdbr_write_memory(libgdbr_t *g, ut64 address, const uint8_t *data, ut64 len) {
@@ -569,7 +606,7 @@ int gdbr_write_memory(libgdbr_t *g, ut64 address, const uint8_t *data, ut64 len)
 	if (!g || !data) {
 		return -1;
 	}
-	g->stub_features.pkt_sz = R_MAX (g->stub_features.pkt_sz, 64);
+	g->stub_features.pkt_sz = R_MAX (g->stub_features.pkt_sz, GDB_MAX_PKTSZ);
 	data_sz = g->stub_features.pkt_sz / 2;
 	if (data_sz < 1) {
 		return -1;
@@ -621,9 +658,11 @@ fail:
 }
 
 int gdbr_step(libgdbr_t *g, int tid) {
-	char thread_id[64];
-	if (write_thread_id (thread_id, sizeof (thread_id) - 1, g->pid, tid,
+	char thread_id[64] = {0};
+	if (tid <= 0 || write_thread_id (thread_id, sizeof (thread_id) - 1, g->pid, tid,
 			     g->stub_features.multiprocess) < 0) {
+		send_vcont (g, "vCont?", NULL);
+		send_vcont (g, "Hc0", NULL);
 		return send_vcont (g, CMD_C_STEP, NULL);
 	}
 	return send_vcont (g, CMD_C_STEP, thread_id);
@@ -637,7 +676,7 @@ int gdbr_continue(libgdbr_t *g, int pid, int tid, int sig) {
 	} else {
 		snprintf (command, sizeof (command) - 1, "%s%02x", CMD_C_CONT_SIG, sig);
 	}
-	if (write_thread_id (thread_id, sizeof (thread_id) - 1, g->pid, tid,
+	if (tid <= 0 || write_thread_id (thread_id, sizeof (thread_id) - 1, g->pid, tid,
 			     g->stub_features.multiprocess) < 0) {
 		return send_vcont (g, command, NULL);
 	}
@@ -673,7 +712,11 @@ int gdbr_write_register(libgdbr_t *g, int index, char *value, int len) {
 		return -1;
 	}
 	reg_cache.valid = false;
-	ret = snprintf (command, 255, "%s%d=", CMD_WRITEREG, index);
+	ret = snprintf (command, sizeof (command) - 1, "%s%d=", CMD_WRITEREG, index);
+	if (len + ret >= sizeof (command)) {
+		eprintf ("command is too small\n");
+		return -1;
+	}
 	memcpy (command + ret, value, len);
 	pack_hex (value, len, (command + ret));
 	if (send_msg (g, command) < 0) {
@@ -736,7 +779,7 @@ int gdbr_write_registers(libgdbr_t *g, char *registers) {
 	}
 	memcpy (buff, registers, len);
 	reg = strtok (buff, ",");
-	while (reg != NULL) {
+	while (reg) {
 		char *name_end = strchr (reg, '=');
 		if (name_end == NULL) {
 			eprintf ("Malformed argument: %s\n", reg);
@@ -1047,7 +1090,7 @@ int gdbr_read_file(libgdbr_t *g, ut8 *buf, ut64 max_len) {
 		eprintf ("%s: No remote file opened\n", __func__);
 		return -1;
 	}
-	g->stub_features.pkt_sz = R_MAX (g->stub_features.pkt_sz, 64);
+	g->stub_features.pkt_sz = R_MAX (g->stub_features.pkt_sz, GDB_MAX_PKTSZ);
 	data_sz = g->stub_features.pkt_sz / 2;
 	ret = 0;
 	while (ret < max_len) {

@@ -3,9 +3,6 @@
 #ifndef R2_CORE_H
 #define R2_CORE_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 #include "r_socket.h"
 #include "r_types.h"
 #include "r_magic.h"
@@ -32,6 +29,9 @@ extern "C" {
 #include "r_crypto.h"
 #include "r_bind.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 R_LIB_VERSION_HEADER(r_core);
 
 #define R_CORE_CMD_EXIT -2
@@ -412,7 +412,7 @@ R_API RCoreAsmHit *r_core_asm_hit_new(void);
 R_API RList *r_core_asm_hit_list_new(void);
 R_API void r_core_asm_hit_free(void *_hit);
 R_API void r_core_set_asm_configs(RCore *core, char *arch, ut32 bits, int segoff);
-R_API char* r_core_asm_search(RCore *core, const char *input, ut64 from, ut64 to);
+R_API char* r_core_asm_search(RCore *core, const char *input);
 R_API RList *r_core_asm_strsearch(RCore *core, const char *input, ut64 from, ut64 to, int maxhits, int regexp);
 R_API RList *r_core_asm_bwdisassemble (RCore *core, ut64 addr, int n, int len);
 R_API RList *r_core_asm_back_disassemble_instr (RCore *core, ut64 addr, int len, ut32 hit_count, ut32 extra_padding);
@@ -629,9 +629,8 @@ R_API int r_core_task_del (RCore *core, int id);
 R_API void r_core_task_join (RCore *core, RCoreTask *task);
 typedef void (*inRangeCb) (RCore *core, ut64 from, ut64 to, int vsize,
 			   bool asterisk, int count);
-R_API int r_core_search_value_in_range (RCore *core, ut64 from, ut64 to,
-					ut64 vmin, ut64 vmax, int vsize,
-					bool asterisk, inRangeCb cb);
+R_API int r_core_search_value_in_range (RCore *core, RAddrInterval search_itv,
+		ut64 vmin, ut64 vmax, int vsize, bool asterisk, inRangeCb cb);
 
 /* PLUGINS */
 extern RCorePlugin r_core_plugin_java;

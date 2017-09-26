@@ -211,10 +211,11 @@ R_API void r_core_sysenv_end(RCore *core, const char *cmd) {
 }
 
 #if DISCUSS
-EDITOR   r_sys_setenv ("EDITOR", r_config_get (core->config, "cfg.editor"));
+EDITOR r_sys_setenv ("EDITOR", r_config_get (core->config, "cfg.editor"));
 CURSOR cursor position (offset from curseek)
 VERBOSE cfg.verbose
 #endif
+
 R_API char *r_core_sysenv_begin(RCore * core, const char *cmd) {
 	char *f, *ret = cmd? strdup (cmd): NULL;
 	RIODesc *desc = core->file ? r_io_desc_get (core->io, core->file->fd) : NULL;
@@ -903,9 +904,18 @@ R_API int r_core_file_list(RCore *core, int mode) {
 					}
 				}
 				if (!header_loaded) {
+					RList* maps = r_io_map_get_for_fd (core->io, f->fd);
+					RListIter *iter;
+					RIOMap* current_map;
 					char *absfile = r_file_abspath (desc->uri);
-					r_cons_printf ("on %s 0x%"PFMT64x "\n", absfile, (ut64) from);
+					r_list_foreach (maps, iter, current_map) {
+						if (current_map) {
+							r_cons_printf ("on %s 0x%"PFMT64x "\n", absfile, current_map->itv.addr);
+						}
+					}
+					r_list_free (maps);
 					free(absfile);
+
 				}
 			}
 			break;

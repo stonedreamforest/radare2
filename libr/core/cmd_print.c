@@ -1112,8 +1112,51 @@ static void cmd_print_format(RCore *core, const char *_input, int len) {
 				if (strchr (name, '.') != NULL) {// || (fields != NULL && strchr(fields, '.') != NULL)) // if anon struct, then field can have '.'
 					eprintf ("Struct or fields name can not contain dot symbol (.)\n");
 				} else {
+					char *newspace = NULL;
+					// Check for recursive struct
+					if (space && *space == '?') {
+						char* tmp = strdup (space);
+						if (!tmp) {
+							goto store_end;
+						}
+						char* opar = strchr (tmp, '(');
+						char* cpar = strchr (tmp, ')');
+						if (!opar || !cpar) {
+							free (tmp);
+							goto store_end;
+						}
+						*cpar = 0;
+						if (strcmp (opar + 1, name) == 0) {
+							eprintf ("Warning: recursive structure. Replacing input.\n");
+							newspace = strdup (space);
+							if (!newspace) {
+								free (tmp);
+								goto store_end;
+							}
+							cpar = strchr (newspace, ')');
+							if (!cpar || cpar <= newspace) {
+								free (tmp);
+								free (newspace);
+								goto store_end;
+							}
+							cpar -= 1;
+							cpar[0] = 'x';
+							cpar[1] = ' ';
+							space = strdup (cpar);
+							free (newspace);
+							if (!space) {
+								free (tmp);
+								goto store_end;
+							}
+						}
+						free (tmp);
+					}
 					sdb_set (core->print->formats, name, space, 0);
+					if (newspace) {
+						free (space);
+					}
 				}
+store_end:
 				free (name);
 				free (input);
 				return;
@@ -3416,11 +3459,11 @@ static int cmd_print(void *data, const char *input) {
 		}
 		off = core->offset;
 		{
-			RList *list = r_core_get_boundaries (core, "file");
+			RList *list = r_core_get_boundaries (core, r_config_get (core->config, "search.in"));
 			RIOMap *map = r_list_first (list);
 			if (map) {
-				from = map->from;
-				to = map->to;
+				from = map->itv.addr;
+				to = r_itv_end (map->itv);
 			}
 			r_list_free (list);
 		}
@@ -3567,21 +3610,21 @@ static int cmd_print(void *data, const char *input) {
 		break;
 	case 'A': // "pA"
 	{
-		ut64 from = r_config_get_i (core->config, "search.from");
-		ut64 to = r_config_get_i (core->config, "search.to");
-		int count = r_config_get_i (core->config, "search.count");
+		const ut64 saved_from = r_config_get_i (core->config, "search.from"),
+				saved_to = r_config_get_i (core->config, "search.to"),
+				saved_maxhits = r_config_get_i (core->config, "search.maxhits");
 
 		int want = r_num_math (core->num, input + 1);
 		if (input[1] == '?') {
 			r_core_cmd0 (core, "/A?");
 		} else {
-			r_config_set_i (core->config, "search.count", want);
+			r_config_set_i (core->config, "search.maxhits", want);
 			r_config_set_i (core->config, "search.from", core->offset);
 			r_config_set_i (core->config, "search.to", core->offset + core->blocksize);
 			r_core_cmd0 (core, "/A");
-			r_config_set_i (core->config, "search.count", count);
-			r_config_set_i (core->config, "search.from", from);
-			r_config_set_i (core->config, "search.to", to);
+			r_config_set_i (core->config, "search.maxhits", saved_maxhits);
+			r_config_set_i (core->config, "search.from", saved_from);
+			r_config_set_i (core->config, "search.to", saved_to);
 		}
 	}
 	break;

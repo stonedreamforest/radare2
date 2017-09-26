@@ -11,6 +11,15 @@ typedef struct r_addr_interval_t {
 	ut64 size;
 } RAddrInterval;
 
+static inline ut64 r_itv_begin(RAddrInterval itv) {
+	return itv.addr;
+}
+
+// Returns the right endpoint address (not included)
+static inline ut64 r_itv_end(RAddrInterval itv) {
+	return itv.addr + itv.size;
+}
+
 // Returns true if itv contained addr
 static inline bool r_itv_contain(RAddrInterval itv, ut64 addr) {
 	ut64 end = itv.addr + itv.size;
@@ -36,7 +45,7 @@ static inline bool r_itv_overlap2(RAddrInterval itv, ut64 addr, ut64 size) {
 // Precondition: itv and x overlap
 // Returns the intersection of itv and x
 static inline RAddrInterval r_itv_intersect(RAddrInterval itv, RAddrInterval x) {
-	ut64 addr = R_MIN (itv.addr, x.addr),
+	ut64 addr = R_MAX (itv.addr, x.addr),
 			end = R_MIN (itv.addr + itv.size - 1, x.addr + x.size - 1) + 1;
 	return (RAddrInterval){addr, end - addr};
 }

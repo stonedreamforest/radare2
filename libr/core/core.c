@@ -2515,14 +2515,14 @@ R_API RBuffer *r_core_syscall (RCore *core, const char *name, const char *args) 
 	return b;
 }
 
-
-R_API int r_core_search_value_in_range(RCore *core, ut64 from, ut64 to, ut64 vmin,
+R_API int r_core_search_value_in_range(RCore *core, RAddrInterval search_itv, ut64 vmin,
 				     ut64 vmax, int vsize, bool asterisk, inRangeCb cb) {
 	int i, match, align = core->search->align, hitctr = 0;
 	bool vinfun = r_config_get_i (core->config, "anal.vinfun");
 	bool vinfunr = r_config_get_i (core->config, "anal.vinfunrange");
 	ut8 buf[4096];
 	ut64 v64, value = 0;
+	ut64 from = search_itv.addr, to = r_itv_end (search_itv);
 	ut32 v32;
 	ut16 v16;
 	if (from >= to) {
@@ -2535,8 +2535,12 @@ R_API int r_core_search_value_in_range(RCore *core, ut64 from, ut64 to, ut64 vmi
 	}
 	r_cons_break_push (NULL, NULL);
 	while (from < to) {
-		memset (buf, 0, sizeof (buf)); // probably unnecessary
-		(void) r_io_read_at (core->io, from, buf, sizeof (buf));
+		memset (buf, 0xff, sizeof (buf)); // probably unnecessary
+		bool res = r_io_read_at (core->io, from, buf, sizeof (buf));
+		if (!res || !memcmp (buf, "\xff\xff\xff\xff", 4)) {
+			from += sizeof (buf);
+			continue;
+		}
 		if (r_cons_is_breaked ()) {
 			goto beach;
 		}

@@ -765,7 +765,8 @@ static void ds_build_op_str(RDisasmState *ds) {
 			if (ds->analop.refptr) {
 				if (core->parser->relsub_addr == 0) {
 					ut64 killme = UT64_MAX;
-					r_io_read_i (core->io, ds->analop.ptr, &killme, 8, false);
+					const int be = core->assembler->big_endian;
+					r_io_read_i (core->io, ds->analop.ptr, &killme, sizeof (killme), be);
 					core->parser->relsub_addr = (int)killme;
 				}
 			}
@@ -3945,7 +3946,19 @@ R_API int r_core_print_disasm_instructions(RCore *core, int nb_bytes, int nb_opc
 		if (nb_bytes < 0) { // Disassemble backward `nb_bytes` bytes
 			nb_bytes = -nb_bytes;
 			core->offset -= nb_bytes;
-			r_core_read_at (core, core->offset, core->block, nb_bytes);
+			if (nb_bytes > core->blocksize) {
+				ut64 obsz = core->blocksize;
+				r_core_block_size (core, nb_bytes);
+				if (core->blocksize == nb_bytes) {
+					r_core_read_at (core, core->offset, core->block, nb_bytes);
+				} else {
+					eprintf ("Cannot read that much!\n");
+					memset (core->block, 0xff, nb_bytes);
+				}
+				r_core_block_size (core, obsz);
+			} else {
+				r_core_read_at (core, core->offset, core->block, nb_bytes);
+			}
 		} else {
 			if (nb_bytes > core->blocksize) {
 				r_core_block_size (core, nb_bytes);
