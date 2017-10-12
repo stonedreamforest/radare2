@@ -449,8 +449,10 @@ R_API bool r_io_read_at(RIO* io, ut64 addr, ut8* buf, int len) {
 	}
 	if (io->va) {
 		ret = r_io_vread_at (io, addr, buf, len);
+		io->ret = ret? len: -1;
 	} else {
-		ret = (r_io_pread_at (io, addr, buf, len) > 0);
+		io->ret = r_io_pread_at (io, addr, buf, len);
+		ret = io->ret > 0;
 	}
 	if (io->cached & R_IO_READ) {
 		(void)r_io_cache_read (io, addr, buf, len);
@@ -508,10 +510,13 @@ R_API bool r_io_write_at(RIO* io, ut64 addr, const ut8* buf, int len) {
 	}
 	if (io->cached & R_IO_WRITE) {
 		ret = r_io_cache_write (io, addr, mybuf, len);
+		io->ret = ret? len: -1;
 	} else if (io->va) {
 		ret = r_io_vwrite_at (io, addr, mybuf, len);
+		io->ret = ret? len: -1;
 	} else {
-		ret = (r_io_pwrite_at (io, addr, mybuf, len) > 0);
+		io->ret = r_io_pwrite_at (io, addr, mybuf, len);
+		ret = io->ret > 0;
 	}
 	if (buf != mybuf) {
 		free (mybuf);
@@ -684,6 +689,7 @@ R_API int r_io_bind(RIO* io, RIOBind* bnd) {
 R_API int r_io_shift(RIO* io, ut64 start, ut64 end, st64 move) {
 	ut8* buf;
 	ut64 chunksize = 0x10000;
+	ut64 saved_off = io->off;
 	ut64 src, shiftsize = r_num_abs (move);
 	if (!shiftsize || (end - start) <= shiftsize) {
 		return false;
@@ -712,6 +718,7 @@ R_API int r_io_shift(RIO* io, ut64 start, ut64 end, st64 move) {
 		rest -= chunksize;
 	}
 	free (buf);
+	io->off = r_io_desc_seek (io->desc, saved_off, R_IO_SEEK_SET);
 	return true;
 }
 

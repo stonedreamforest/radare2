@@ -53,6 +53,7 @@ typedef struct r_io_undo_w_t {
 
 typedef struct r_io_t {
 	struct r_io_desc_t *desc;
+	int ret; // number of bytes read or written
 	ut64 off;
 	int bits;
 	int va;		//all of this config stuff must be in 1 int
@@ -520,5 +521,6 @@ extern RIOPlugin r_io_plugin_bochs;
 extern RIOPlugin r_io_plugin_null;
 extern RIOPlugin r_io_plugin_ar;
 extern RIOPlugin r_io_plugin_rbuf;
+extern RIOPlugin r_io_plugin_winedbg;
 
 #endif

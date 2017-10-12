@@ -1495,8 +1495,10 @@ static int r_core_cmd_subst(RCore *core, char *cmd) {
 	cmd = r_str_trim_head_tail (icmd);
 	// lines starting with # are ignored (never reach cmd_hash()), except #! and #?
 	if (!*cmd) {
-		r_core_cmd_repeat (core, true);
-		ret = r_core_cmd_nullcallback (core);
+		if (r_config_get_i (core->config, "cmd.repeat")) {
+			r_core_cmd_repeat (core, true);
+			ret = r_core_cmd_nullcallback (core);
+		}
 		goto beach;
 	}
 	if (!icmd || (cmd[0] == '#' && cmd[1] != '!' && cmd[1] != '?')) {
@@ -1516,7 +1518,7 @@ static int r_core_cmd_subst(RCore *core, char *cmd) {
 		colon = NULL;
 	}
 	if (rep > 0) {
-		while (IS_DIGIT(*cmd)) {
+		while (IS_DIGIT (*cmd)) {
 			cmd++;
 		}
 		// do not repeat null cmd
@@ -1633,7 +1635,7 @@ static int r_core_cmd_subst_i(RCore *core, char *cmd, char *colon) {
 		if ($1) {
 			*$0 = '`';
 			*$1 = '`';
-			memmove ($0 + 1, $0 + 2, strlen ($0) + 1);
+			memmove ($0 + 1, $0 + 2, strlen ($0 + 2) + 1);
 		} else {
 			eprintf ("Unterminated $() block\n");
 		}
@@ -1754,9 +1756,10 @@ static int r_core_cmd_subst_i(RCore *core, char *cmd, char *colon) {
 		}
 		return true;
 	case '(':
-		if (cmd[1] != '*') {
+		if (cmd[1] != '*' && !strstr (cmd, ")()")) {
 			return r_cmd_call (core->rcmd, cmd);
 		}
+		break;
 	}
 
 // TODO must honor " and `
@@ -2081,7 +2084,8 @@ next2:
 	}
 
 	/* temporary seek commands */
-	if (*cmd!= '(' && *cmd != '"') {
+	// if (*cmd != '(' && *cmd != '"') {
+	if (*cmd != '"') {
 		ptr = strchr (cmd, '@');
 		if (ptr == cmd + 1 && *cmd == '?') {
 			ptr = NULL;
@@ -2613,7 +2617,6 @@ R_API int r_core_cmd_foreach(RCore *core, const char *cmd, char *each) {
 	RFlagItem *flag;
 	ut64 oseek, addr;
 
-	// for (; *each == ' '; each++);
 	for (; *cmd == ' '; cmd++);
 
 	oseek = core->offset;

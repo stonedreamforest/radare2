@@ -957,7 +957,7 @@ static void cmd_print_format(RCore *core, const char *_input, int len) {
 			_input++;
 			val = sdb_get (core->print->formats, _input, NULL);
 			if (val != NULL) {
-				r_cons_printf ("%d bytes\n", r_print_format_struct_size (val, core->print, mode));
+				r_cons_printf ("%d bytes\n", r_print_format_struct_size (val, core->print, mode, 0));
 			} else {
 				eprintf ("Struct %s not defined\nUsage: pfs.struct_name | pfs format\n", _input);
 			}
@@ -966,7 +966,7 @@ static void cmd_print_format(RCore *core, const char *_input, int len) {
 				_input++;
 			}
 			if (*_input) {
-				r_cons_printf ("%d bytes\n", r_print_format_struct_size (_input, core->print, mode));
+				r_cons_printf ("%d bytes\n", r_print_format_struct_size (_input, core->print, mode, 0));
 			} else {
 				eprintf ("Struct %s not defined\nUsage: pfs.struct_name | pfs format\n", _input);
 			}
@@ -1112,51 +1112,8 @@ static void cmd_print_format(RCore *core, const char *_input, int len) {
 				if (strchr (name, '.') != NULL) {// || (fields != NULL && strchr(fields, '.') != NULL)) // if anon struct, then field can have '.'
 					eprintf ("Struct or fields name can not contain dot symbol (.)\n");
 				} else {
-					char *newspace = NULL;
-					// Check for recursive struct
-					if (space && *space == '?') {
-						char* tmp = strdup (space);
-						if (!tmp) {
-							goto store_end;
-						}
-						char* opar = strchr (tmp, '(');
-						char* cpar = strchr (tmp, ')');
-						if (!opar || !cpar) {
-							free (tmp);
-							goto store_end;
-						}
-						*cpar = 0;
-						if (strcmp (opar + 1, name) == 0) {
-							eprintf ("Warning: recursive structure. Replacing input.\n");
-							newspace = strdup (space);
-							if (!newspace) {
-								free (tmp);
-								goto store_end;
-							}
-							cpar = strchr (newspace, ')');
-							if (!cpar || cpar <= newspace) {
-								free (tmp);
-								free (newspace);
-								goto store_end;
-							}
-							cpar -= 1;
-							cpar[0] = 'x';
-							cpar[1] = ' ';
-							space = strdup (cpar);
-							free (newspace);
-							if (!space) {
-								free (tmp);
-								goto store_end;
-							}
-						}
-						free (tmp);
-					}
 					sdb_set (core->print->formats, name, space, 0);
-					if (newspace) {
-						free (space);
-					}
 				}
-store_end:
 				free (name);
 				free (input);
 				return;
@@ -1175,7 +1132,7 @@ store_end:
 			const char *fmt = NULL;
 			fmt = sdb_get (core->print->formats, name, NULL);
 			if (fmt != NULL) {
-				int size = r_print_format_struct_size (fmt, core->print, mode) + 10;
+				int size = r_print_format_struct_size (fmt, core->print, mode, 0) + 10;
 				if (size > core->blocksize) {
 					r_core_block_size (core, size);
 				}
@@ -1203,7 +1160,7 @@ store_end:
 		/* This make sure the structure will be printed entirely */
 		char *fmt = input + 1;
 		while (*fmt && ISWHITECHAR (*fmt)) fmt++;
-		int size = r_print_format_struct_size (fmt, core->print, mode) + 10;
+		int size = r_print_format_struct_size (fmt, core->print, mode, 0) + 10;
 		if (size > core->blocksize) {
 			r_core_block_size (core, size);
 		}
@@ -2727,7 +2684,7 @@ static void cmd_print_bars(RCore *core, const char *input) {
 	case 'F': // 0xff bytes
 	case 'p': // printable chars
 	case 'z': // zero terminated strings
-	{
+	if (blocksize > 0) {
 		ut8 *p;
 		ut64 i, j, k;
 		ptr = calloc (1, nblocks);
@@ -2781,6 +2738,8 @@ static void cmd_print_bars(RCore *core, const char *input) {
 		}
 		free (p);
 		print_bars = true;
+	} else {
+		eprintf ("Invalid blocksize\n");
 	}
 	break;
 	case 'b': // bytes
@@ -3033,7 +2992,7 @@ static void func_walk_blocks(RCore *core, RAnalFunction *f, char input, char typ
 	}
 	// XXX: hack must be reviewed/fixed in code analysis
 	if (r_list_length (f->bbs) == 1) {
-		ut32 fcn_size = r_anal_fcn_size (f);
+		ut32 fcn_size = r_anal_fcn_realsize (f);
 		b = r_list_get_top (f->bbs);
 		if (b->size > fcn_size) {
 			b->size = fcn_size;
@@ -4075,7 +4034,6 @@ static int cmd_print(void *data, const char *input) {
 			} else {
 				ut32 bsz = core->blocksize;
 				RAnalFunction *f = r_anal_get_fcn_in (core->anal, core->offset, 0);
-				// R_ANAL_FCN_TYPE_FCN | R_ANAL_FCN_TYPE_SYM);
 				RAnalFunction *tmp_func;
 				ut32 cont_size = 0;
 				RListIter *locs_it = NULL;
@@ -4145,8 +4103,14 @@ static int cmd_print(void *data, const char *input) {
 					}
 					cont_size = tmp_get_contsize (f);
 #endif
-					r_core_cmdf (core, "pD %d @ 0x%08" PFMT64x,
-						f->_size > 0 ? f->_size: r_anal_fcn_realsize (f), f->addr);
+					ut32 linear = f->_size;
+					ut32 bbsum = r_anal_fcn_realsize (f);
+					if (bbsum + 4096 < linear) {
+						eprintf ("Linear size differs too much from the bbsum, please use pdr instead.\n");
+					} else {
+						r_core_cmdf (core, "pD %d @ 0x%08" PFMT64x,
+							f->_size > 0 ? f->_size: r_anal_fcn_realsize (f), f->addr);
+					}
 #if 0
 					for (; locs_it && (tmp_func = locs_it->data); locs_it = locs_it->n) {
 						cont_size = tmp_get_contsize (tmp_func);

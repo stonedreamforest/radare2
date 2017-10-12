@@ -24,7 +24,7 @@ static const char *help_msg_C[] = {
 	"CCu", " [comment-text] [@addr]", "add unique comment",
 	"Cv", "[bsr][?]", "add comments to args",
 	"Cs", "[?] [-] [size] [@addr]", "add string",
-	"Cz", "[@addr]", "add zero-terminated string",
+	"Cz", "[@addr]", "add string (see Cs?)",
 	"Ch", "[-] [size] [@addr]", "hide data",
 	"Cd", "[-] [size] [repeat] [@addr]", "hexdump data array (Cd 4 10 == dword [10])",
 	"Cf", "[?][-] [sz] [0|cnt][fmt] [a0 a1...] [@addr]", "format memory (see pf?)",
@@ -60,6 +60,19 @@ static const char *help_msg_CS[] = {
 	"CS","-","pop to the previous metaspace",
 	//	"CSm"," [addr]","move metas at given address to the current metaspace",
 	"CSr"," newname","rename selected metaspace",
+	NULL
+};
+
+static const char *help_msg_Cs[] = {
+	"Usage:", "Cs[ga-*.] [size] [@addr]", "",
+	"Cs", "", "list all strings in human friendly form",
+	"Cs*", "", "list all strings in r2 commands",
+	"Cs", " [size] @addr", "add string (guess latin1/utf16le)",
+	"Csg", " [size] [@addr]", "as above but addr not needed",
+	" Cz", " [size] [@addr]", "ditto",
+	"Csa", " [size] [@addr]", "add ascii/latin1 string",
+	"Cs-", " [@addr]", "remove string",
+	"Cs.", "", "show string at current address",
 	NULL
 };
 
@@ -103,6 +116,7 @@ static void cmd_meta_init(RCore *core) {
 	DEFINE_CMD_DESCRIPTOR (core, C);
 	DEFINE_CMD_DESCRIPTOR (core, CC);
 	DEFINE_CMD_DESCRIPTOR (core, CS);
+	DEFINE_CMD_DESCRIPTOR (core, Cs);
 	DEFINE_CMD_DESCRIPTOR (core, Cvb);
 	DEFINE_CMD_DESCRIPTOR (core, Cvr);
 	DEFINE_CMD_DESCRIPTOR (core, Cvs);
@@ -501,7 +515,7 @@ static int cmd_meta_comment(RCore *core, const char *input) {
 
 static int cmd_meta_hsdmf(RCore *core, const char *input) {
 	int n, type = input[0];
-	char *t = 0, *p, name[256];
+	char *t = 0, *p, name[256], *str;
 	int repeat = 1;
 	ut64 addr_end = 0LL, addr = core->offset;
 
@@ -517,6 +531,9 @@ static int cmd_meta_hsdmf(RCore *core, const char *input) {
 				"but have only identified specific fields in it. In that case, use 'fmt'\n"
 				"to show the fields you know about (perhaps using 'skip' fields), and 'sz'\n"
 				"to match the total struct size in mem.\n");
+			break;
+		case 's':
+			r_core_cmd_help (core, help_msg_Cs);
 			break;
 		default:
 			r_cons_println ("See C?");
@@ -559,8 +576,23 @@ static int cmd_meta_hsdmf(RCore *core, const char *input) {
 			free (comment);
 		}
 		break;
+	case '.':
+		str = r_meta_get_string (core->anal, type, addr);
+		if (str) {
+			if (type == 's') {
+				char *esc_str = r_str_escape_latin1 (str, false, true);
+				r_cons_printf ("\"%s\"\n", esc_str);
+				free (esc_str);
+			} else {
+				r_cons_println (str);
+			}
+			free (str);
+		}
+		break;
 	case ' ':
 	case '\0':
+	case 'g':
+	case 'a':
 		if (type != 'z' && !input[1] && !core->tmpseek) {
 			r_meta_list (core->anal, type, 0);
 			break;
@@ -570,9 +602,11 @@ static int cmd_meta_hsdmf(RCore *core, const char *input) {
 		}
 		if (strlen (input) > 2) {
 			char *rep = strchr (input + 2, '[');
-			if (!rep) rep = strchr (input + 2, ' ');
+			if (!rep) {
+				rep = strchr (input + 2, ' ');
+			}
 			if (rep) {
-				repeat = r_num_get (core->num, rep + 1);
+				repeat = r_num_math (core->num, rep + 1);
 			}
 		}
 		int repcnt = 0;
@@ -590,7 +624,7 @@ static int cmd_meta_hsdmf(RCore *core, const char *input) {
 					p = strchr (t, ' ');
 					if (p) {
 						if (n < 1) {
-							n = r_print_format_struct_size (p + 1, core->print, 0);
+							n = r_print_format_struct_size (p + 1, core->print, 0, 0);
 							if (n < 1) {
 								eprintf ("Cannot resolve struct size\n");
 								n = 32; //
@@ -612,24 +646,30 @@ static int cmd_meta_hsdmf(RCore *core, const char *input) {
 				} else if (type == 's') { //Cs
 					char tmp[256] = R_EMPTY;
 					int i, j, name_len = 0;
-					(void)r_core_read_at (core, addr, (ut8*)tmp, sizeof (tmp) - 3);
-					name_len = r_str_nlen_w (tmp, sizeof (tmp) - 3);
-					//handle wide strings
-					for (i = 0, j = 0; i < sizeof (name); i++, j++) {
-						name[i] = tmp[j];
-						if (!tmp[j]) {
-							break;
-						}
-						if (!tmp[j + 1]) {
-							if (j + 3 < sizeof (tmp)) {
-								if (tmp[j + 3]) {
-									break;	
-								}
+					if (input[1] == 'a') {
+						(void)r_core_read_at (core, addr, (ut8*)name, sizeof (name) - 1);
+						name[sizeof (name) - 1] = '\0';
+						name_len = strlen (name);
+					} else {
+						(void)r_core_read_at (core, addr, (ut8*)tmp, sizeof (tmp) - 3);
+						name_len = r_str_nlen_w (tmp, sizeof (tmp) - 3);
+						//handle wide strings
+						for (i = 0, j = 0; i < sizeof (name); i++, j++) {
+							name[i] = tmp[j];
+							if (!tmp[j]) {
+								break;
 							}
-							j++;
+							if (!tmp[j + 1]) {
+								if (j + 3 < sizeof (tmp)) {
+									if (tmp[j + 3]) {
+										break;
+									}
+								}
+								j++;
+							}
 						}
+						name[sizeof (name) - 1] = '\0';
 					}
-					name[sizeof (name) - 1] = '\0';
 					if (n == 0) {
 						n = name_len + 1;
 					} else {
@@ -842,7 +882,7 @@ static int cmd_meta(void *data, const char *input) {
 	case 'h': /* Ch comment */
 	case 's': /* Cs string */
 	case 'z': /* Cz zero-terminated string */
-	case 'd': /* Cd data */
+	case 'd': /* "Cd" data */
 	case 'm': /* Cm magic */
 	case 'f': /* Cf formatted */
 		cmd_meta_hsdmf (core, input);

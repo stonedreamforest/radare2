@@ -79,6 +79,7 @@ R_API void r_egg_free (REgg *egg) {
 	sdb_free (egg->db);
 	r_list_free (egg->plugins);
 	r_list_free (egg->patches);
+	r_egg_lang_free (egg);
 	free (egg);
 }
 
@@ -252,41 +253,53 @@ R_API void r_egg_printf(REgg *egg, const char *fmt, ...) {
 	va_end (ap);
 }
 
-R_API int r_egg_assemble(REgg *egg) {
+R_API int r_egg_assemble_asm(REgg *egg, char **asm_list) {
 	RAsmCode *asmcode = NULL;
 	char *code = NULL;
 	int ret = false;
-	if (egg->remit == &emit_x86 || egg->remit == &emit_x64) {
-		r_asm_use (egg->rasm, "x86.nz");
+	char *asm_name = NULL;
+
+	if (asm_list) {
+		char **asm_;
+
+		for (asm_ = asm_list; *asm_; asm_+= 2) {
+			if (!strcmp (egg->remit->arch, asm_[0])) {
+				asm_name = asm_[1];
+				break;
+			}
+		}
+	}
+	if (!asm_name) {
+		if (egg->remit == &emit_x86 || egg->remit == &emit_x64) {
+			asm_name = "x86.nz";
+		} else if (egg->remit == &emit_arm) {
+			asm_name = "arm";
+		}
+	}
+	if (asm_name) {
+		r_asm_use (egg->rasm, asm_name);
 		r_asm_set_bits (egg->rasm, egg->bits);
 		r_asm_set_big_endian (egg->rasm, egg->endian);
 		r_asm_set_syntax (egg->rasm, R_ASM_SYNTAX_INTEL);
-
 		code = r_buf_to_string (egg->buf);
 		asmcode = r_asm_massemble (egg->rasm, code);
 		if (asmcode) {
-			if (asmcode->len > 0)
+			if (asmcode->len > 0) {
 				r_buf_append_bytes (egg->bin, asmcode->buf, asmcode->len);
+			}
 			// LEAK r_asm_code_free (asmcode);
-		} else eprintf ("fail assembling\n");
-	} else
-	if (egg->remit == &emit_arm) {
-		r_asm_use (egg->rasm, "arm");
-		r_asm_set_bits (egg->rasm, egg->bits);
-		r_asm_set_big_endian (egg->rasm, egg->endian);
-		r_asm_set_syntax (egg->rasm, R_ASM_SYNTAX_INTEL);
-
-		code = r_buf_to_string (egg->buf);
-		asmcode = r_asm_massemble (egg->rasm, code);
-		if (asmcode) {
-			r_buf_append_bytes (egg->bin, asmcode->buf, asmcode->len);
-			// LEAK r_asm_code_free (asmcode);
+		} else {
+			eprintf ("fail assembling\n");
 		}
 	}
 	free (code);
 	ret = (asmcode != NULL);
 	r_asm_code_free (asmcode);
 	return ret;
+}
+
+R_API int r_egg_assemble(REgg *egg) {
+	return r_egg_assemble_asm (egg, NULL);
 }
 
 R_API int r_egg_compile(REgg *egg) {
@@ -302,6 +315,7 @@ R_API int r_egg_compile(REgg *egg) {
 			egg->remit->init (egg);
 	}
 #endif
+	r_egg_lang_init (egg);
 	if (b && *b) {
 		for (; b[0]; b++) {
 			r_egg_lang_parsechar (egg, *b);

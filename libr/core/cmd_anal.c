@@ -333,7 +333,7 @@ static const char *help_msg_afv[] = {
 };
 
 static const char *help_msg_afvb[] = {
-	"Usage:", "afvb", " [idx] [type] [name]",
+	"Usage:", "afvb", " [idx] [name] ([type])",
 	"afvb", "", "list base pointer based arguments, locals",
 	"afvb*", "", "same as afvb but in r2 commands",
 	"afvb", " [idx] [name] ([type])", "define base pointer based arguments, locals",
@@ -1129,6 +1129,7 @@ R_API char *cmd_syscall_dostr(RCore *core, int n) {
 			res = r_str_appendf (res, ", ");
 		}
 	}
+	r_syscall_item_free (item);
 	res = r_str_appendf (res, ")");
 	return res;
 }
@@ -3931,10 +3932,14 @@ static void cmd_anal_esil(RCore *core, const char *input) {
 					r_cons_println (out);
 					free (out);
 				}
-			} else eprintf ("esil.stats is empty. Run 'aei'\n");
+			} else {
+				eprintf ("esil.stats is empty. Run 'aei'\n");
+			}
 			break;
 		case '-':
-			sdb_reset (esil->stats);
+			if (esil) {
+				sdb_reset (esil->stats);
+			}
 			break;
 		}
 		break;
@@ -4676,10 +4681,12 @@ static bool cmd_anal_refs(RCore *core, const char *input) {
 		}
 		break;
 	case 'k': // "axk"
-		if (input[1] == ' ') {
+		if (input[1] == '?') {
+			eprintf ("Usage: axk [query]\n");
+		} else if (input[1] == ' ') {
 			sdb_query (core->anal->sdb_xrefs, input + 2);
 		} else {
-			eprintf ("|ERROR| Usage: axk [query]\n");
+			r_core_anal_ref_list (core, 'k');
 		}
 		break;
 	case '\0': // "ax"
